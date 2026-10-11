@@ -42,7 +42,6 @@ export const config = {
   feishu: {
     webhook: env.FEISHU_WEBHOOK || '',
     secret: env.FEISHU_SECRET || '',
-    mention: env.FEISHU_MENTION || '<at user_id="all">所有人</at> ',
   },
 };
 

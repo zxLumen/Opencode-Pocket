@@ -11,10 +11,9 @@ export function feishuChannel(cfg) {
     name: 'feishu',
     get enabled() { return Boolean(cfg.feishu.webhook); },
     async send(n) {
-      const mention = cfg.feishu.mention || '<at user_id="all">所有人</at> ';
       const body = {
         msg_type: 'text',
-        content: { text: `${mention}${n.title}\n${n.body}` },
+        content: { text: `${n.title}\n${n.body}` },
       };
       if (cfg.feishu.secret) {
         const timestamp = Math.floor(Date.now() / 1000).toString();

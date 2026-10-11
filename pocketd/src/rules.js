@@ -31,7 +31,7 @@ function describeForm(form = {}) {
 export function evaluate(event) {
   const type = event?.type || '';
   const data = event?.data || {};
-  const sessionID = data.sessionID || data.sessionId || event?.sessionID;
+  const sessionID = data.sessionID || data.sessionId || data.form?.sessionID || event?.sessionID;
   const base = { sessionID, directory: event?.location?.directory, type };
 
   // 审批
