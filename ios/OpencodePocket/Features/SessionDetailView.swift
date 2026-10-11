@@ -122,6 +122,7 @@ struct SessionDetailView: View {
                     Color.clear.preference(key: ViewHeightKey.self, value: g.size.height)
                 })
                 .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in follow = false })
+                .simultaneousGesture(TapGesture().onEnded { dismissKeyboard() })
                 .onPreferenceChange(ViewHeightKey.self) { viewportHeight = $0 }
                 .onPreferenceChange(BottomYKey.self) { minY in
                     if minY <= viewportHeight + 30 { follow = true }
@@ -151,10 +152,6 @@ struct SessionDetailView: View {
         .navigationTitle(session?.displayTitle ?? "会话")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("收起") { dismissKeyboard() }
-            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 agentMenu
                 modelMenu

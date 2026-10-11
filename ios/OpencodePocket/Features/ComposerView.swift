@@ -11,8 +11,12 @@ struct ComposerView: View {
     @State private var speech = SpeechRecognizer()
     @State private var uploading = false
 
+    private var canSend: Bool {
+        !uploading && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+    }
+
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             if !attachments.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -20,58 +24,60 @@ struct ComposerView: View {
                             ZStack(alignment: .topTrailing) {
                                 if let d = a.data, let ui = UIImage(data: d) {
                                     Image(uiImage: ui).resizable().scaledToFill()
-                                        .frame(width: 56, height: 56)
+                                        .frame(width: 54, height: 54)
                                         .clipShape(RoundedRectangle(cornerRadius: 8))
                                 } else {
                                     RoundedRectangle(cornerRadius: 8).fill(Color(.secondarySystemFill))
-                                        .frame(width: 56, height: 56)
+                                        .frame(width: 54, height: 54)
                                 }
                                 Button { attachments.removeAll { $0.id == a.id } } label: {
                                     Image(systemName: "xmark.circle.fill")
-                                        .font(.caption).foregroundStyle(.white, .black.opacity(0.6))
+                                        .font(.caption).foregroundStyle(.white, .black.opacity(0.55))
                                 }
                                 .offset(x: 5, y: -5)
                             }
                         }
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 2)
                 }
             }
 
-            if speech.isRecording {
-                HStack(spacing: 6) {
-                    Circle().fill(.red).frame(width: 8, height: 8)
-                    Text("正在聆听…").font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-            }
-
-            HStack(alignment: .bottom, spacing: 6) {
+            HStack(alignment: .bottom, spacing: 8) {
                 PhotosPicker(selection: $photoItem, matching: .images) {
-                    Image(systemName: "photo.on.rectangle").font(.title3)
+                    Image(systemName: "photo")
+                        .font(.system(size: 20))
+                        .foregroundStyle(uploading ? Color.secondary : Color.accentColor)
                 }
                 .disabled(uploading)
 
                 TextField("输入指令…", text: $text, axis: .vertical)
                     .lineLimit(1...5)
-                    .textFieldStyle(.roundedBorder)
+                    .font(.body)
 
                 Button { speech.toggle() } label: {
-                    Image(systemName: speech.isRecording ? "mic.fill" : "mic").font(.title3)
+                    Image(systemName: speech.isRecording ? "mic.fill" : "mic")
+                        .font(.system(size: 20))
                         .foregroundStyle(speech.isRecording ? Color.red : Color.accentColor)
                 }
 
                 Button { send() } label: {
-                    Image(systemName: uploading ? "ellipsis.circle" : "paperplane.fill")
-                        .padding(.vertical, 6)
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(canSend ? Color.accentColor : Color(.tertiarySystemFill)))
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(uploading || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty))
+                .disabled(!canSend)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .padding(.horizontal, 10)
+            .padding(.top, 2)
         }
-        .padding(.vertical, 8)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
         .background(Color(.systemBackground))
         .overlay(Divider(), alignment: .top)
         .onChange(of: photoItem) { _, item in Task { await handlePhoto(item) } }
@@ -94,7 +100,7 @@ struct ComposerView: View {
 
     private func send() {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !uploading, !value.isEmpty || !attachments.isEmpty else { return }
+        guard canSend else { return }
         let files = attachments
         text = ""
         attachments = []
