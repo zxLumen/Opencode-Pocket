@@ -40,7 +40,8 @@ final class PocketStore {
     var serverVersion: String?
 
     // Connection form fields
-    var baseURL: String = Credentials.baseURL
+    static let defaultServerURL = "https://pocket.example.com"
+    var baseURL: String = Credentials.baseURL.isEmpty ? PocketStore.defaultServerURL : Credentials.baseURL
     var username: String = Credentials.username
     var password: String = ""
 
