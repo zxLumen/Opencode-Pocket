@@ -32,3 +32,6 @@ xcrun devicectl device process terminate --device "$DEVICE_UDID" "$BUNDLE_ID" 2>
 xcrun devicectl device process launch --device "$DEVICE_UDID" "$BUNDLE_ID"
 
 echo "==> 完成"
+
+# 部署过程会切换 Wi-Fi（含 2.4G/5G），可能打断反向隧道；收尾重建一次。
+launchctl kickstart -k "gui/$(id -u)/ai.opencode.pocket.tunnel" 2>/dev/null || true

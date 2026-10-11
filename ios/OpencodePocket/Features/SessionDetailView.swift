@@ -18,13 +18,11 @@ private func dismissKeyboard() {
     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
 }
 
-/// 可折叠区块：展开状态由父级持有，避免频繁重渲染导致展开态丢失。
 struct ExpandableSection<Content: View>: View {
     let title: String
     let key: String
     @Binding var expanded: Set<String>
     @ViewBuilder var content: () -> Content
-
     private var isOpen: Bool { expanded.contains(key) }
 
     var body: some View {
@@ -40,7 +38,6 @@ struct ExpandableSection<Content: View>: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-
             if isOpen { content() }
         }
     }
@@ -71,7 +68,8 @@ struct SessionDetailView: View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 14) {
+                    // 非惰性 VStack：消息量有限（分页），避免 LazyVStack 在键盘/尺寸变化时不重排导致空白
+                    VStack(alignment: .leading, spacing: 14) {
                         Color.clear
                             .frame(height: 1)
                             .background(GeometryReader { g in
@@ -116,6 +114,7 @@ struct SessionDetailView: View {
                     .padding(.bottom, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .defaultScrollAnchor(.bottom)     // 初始即在底部（原生，避免手动 scrollTo 的空白/错位）
                 .coordinateSpace(name: "scroll")
                 .scrollDismissesKeyboard(.interactively)
                 .background(GeometryReader { g in
@@ -134,10 +133,18 @@ struct SessionDetailView: View {
                 }
                 .onChange(of: messages.count) { _, _ in if follow { scrollToBottom(proxy) } }
                 .onChange(of: live) { _, _ in if follow { scrollToBottom(proxy) } }
-                .onChange(of: store.refreshTick) { _, _ in Task { await reload(); if follow { scrollToBottom(proxy) } } }
+                .onChange(of: store.refreshTick) { _, _ in
+                    Task { await refreshNewest(); if follow { scrollToBottom(proxy) } }
+                }
                 .task(id: isRunning) {
-                    await reload()
-                    scrollToBottom(proxy, animated: false)
+                    seedFromCache()
+                    store.markViewed(sessionID)
+                    if messages.isEmpty {
+                        await reload()
+                        scrollToBottom(proxy, animated: false)
+                    } else {
+                        await refreshNewest()
+                    }
                     while isRunning && !Task.isCancelled {
                         try? await Task.sleep(nanoseconds: 3_000_000_000)
                         if Task.isCancelled { break }
@@ -147,7 +154,7 @@ struct SessionDetailView: View {
                 }
             }
 
-            ComposerView(sessionID: sessionID)   // 固定底栏（内容在其上方，栏下无内容）
+            ComposerView(sessionID: sessionID)
         }
         .navigationTitle(session?.displayTitle ?? "会话")
         .navigationBarTitleDisplayMode(.inline)
@@ -166,19 +173,36 @@ struct SessionDetailView: View {
         else { proxy.scrollTo("bottom", anchor: .bottom) }
     }
 
+    private func seedFromCache() {
+        guard messages.isEmpty, let cached = store.messageCache[sessionID], !cached.isEmpty else { return }
+        messages = cached
+        olderCursor = store.cursorCache[sessionID]
+    }
+
+    private func persist() {
+        store.messageCache[sessionID] = messages
+        if let c = olderCursor { store.cursorCache[sessionID] = c }
+        else { store.cursorCache.removeValue(forKey: sessionID) }
+    }
+
     private func reload() async {
         let page = await store.loadMessages(sessionID: sessionID, limit: pageSize)
         messages = page.items.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
         olderCursor = page.previous
+        persist()
     }
 
+    /// 运行中只增量刷新最新一页，保留已加载的更早内容。
     private func refreshNewest() async {
         let page = await store.loadMessages(sessionID: sessionID, limit: pageSize)
         let newest = page.items.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
         let existing = Set(messages.map { $0.id })
         let fresh = newest.filter { !existing.contains($0.id) }
-        if !fresh.isEmpty { messages.append(contentsOf: fresh) }
-        if olderCursor == nil { olderCursor = page.previous }
+        if !fresh.isEmpty {
+            messages.append(contentsOf: fresh)
+            persist()
+        }
+        if olderCursor == nil, let prev = page.previous { olderCursor = prev; persist() }
     }
 
     private func loadOlder() async {
@@ -189,13 +213,14 @@ struct SessionDetailView: View {
         let existing = Set(messages.map { $0.id })
         messages = older.filter { !existing.contains($0.id) } + messages
         olderCursor = page.previous
+        persist()
         loadingOlder = false
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Circle().fill(isRunning ? Color.green : Color.secondary.opacity(0.4)).frame(width: 9, height: 9)
+                Circle().fill(isRunning ? Color.yellow : Color.secondary.opacity(0.4)).frame(width: 9, height: 9)
                 Text(isRunning ? "运行中" : "空闲").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if let cost = session?.cost, cost > 0 {

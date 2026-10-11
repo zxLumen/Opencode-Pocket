@@ -5,8 +5,8 @@ struct SessionListView: View {
     @State private var path: [String] = []
     @State private var showSettings = false
     @State private var search = ""
-    @State private var collapsed: Set<String> = []        // 整个分区折叠
-    @State private var expandedGroups: Set<String> = []    // 分区内展开全部（默认只显示前 5）
+    @State private var collapsed: Set<String> = []
+    @State private var expandedGroups: Set<String> = []
 
     private let previewLimit = 5
 
@@ -21,7 +21,12 @@ struct SessionListView: View {
         }
     }
 
-    /// 组内按最近活跃(updated)倒序；组间也按"该组最近活跃"倒序。
+    private var favoriteSessions: [Session] {
+        filtered.filter { store.favorites.contains($0.id) }
+            .sorted { ($0.time?.updated ?? 0) > ($1.time?.updated ?? 0) }
+    }
+
+    /// 组内按最近活跃倒序；组间按"该组最近活跃"倒序。
     private var groups: [(String, [Session])] {
         Dictionary(grouping: filtered, by: { $0.projectName })
             .map { (name, list) -> (String, [Session], Double) in
@@ -48,9 +53,15 @@ struct SessionListView: View {
                             }
                         }
                         ForEach(store.pendingForms) { f in
-                            Button { open(f.sessionID) } label: {
-                                Label(f.title, systemImage: "list.bullet.rectangle")
-                            }
+                            Button { open(f.sessionID) } label: { Label(f.title, systemImage: "list.bullet.rectangle") }
+                        }
+                    }
+                }
+
+                if !favoriteSessions.isEmpty {
+                    Section("收藏") {
+                        ForEach(favoriteSessions) { session in
+                            SessionRow(session: session) { path.append(session.id) }
                         }
                     }
                 }
@@ -62,17 +73,14 @@ struct SessionListView: View {
                             let visible = showAll ? sessions : Array(sessions.prefix(previewLimit))
 
                             ForEach(visible) { session in
-                                Button { path.append(session.id) } label: { SessionRow(session: session) }
-                                    .buttonStyle(.plain)
+                                SessionRow(session: session) { path.append(session.id) }
                             }
 
                             if !isSearching && sessions.count > previewLimit {
                                 if expandedGroups.contains(name) {
-                                    Button("收起") { expandedGroups.remove(name) }
-                                        .font(.caption).foregroundStyle(.secondary)
+                                    Button("收起") { expandedGroups.remove(name) }.font(.caption).foregroundStyle(.secondary)
                                 } else {
-                                    Button("展开其余 \(sessions.count - previewLimit) 个") { expandedGroups.insert(name) }
-                                        .font(.caption)
+                                    Button("展开其余 \(sessions.count - previewLimit) 个") { expandedGroups.insert(name) }.font(.caption)
                                 }
                             }
                         }
@@ -130,43 +138,81 @@ struct SessionListView: View {
     }
 }
 
+struct BlinkingDot: View {
+    let color: Color
+    let blink: Bool
+    @State private var on = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 9, height: 9)
+            .opacity(blink ? (on ? 1 : 0.2) : 1)
+            .onAppear {
+                guard blink else { return }
+                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { on = true }
+            }
+    }
+}
+
 struct SessionRow: View {
     @Environment(PocketStore.self) private var store
     let session: Session
+    let onOpen: () -> Void
+
+    private var state: DotState { store.dotState(for: session) }
+
+    private var color: Color {
+        switch state {
+        case .pending: return .orange
+        case .running: return .yellow
+        case .done: return .green
+        case .idle: return Color.secondary.opacity(0.4)
+        }
+    }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Circle()
-                .fill(store.activeIDs.contains(session.id) ? Color.green : Color.secondary.opacity(0.35))
-                .frame(width: 9, height: 9)
-                .padding(.top, 5)
+        HStack(alignment: .top, spacing: 8) {
+            Button(action: onOpen) {
+                HStack(alignment: .top, spacing: 10) {
+                    BlinkingDot(color: color, blink: state == .pending)
+                        .padding(.top, 5)
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(session.displayTitle)
-                    .font(.body.weight(.medium))
-                    .lineLimit(2)
-                HStack(spacing: 8) {
-                    Label(session.projectName, systemImage: "folder")
-                    if let agent = session.agent { Text(agent) }
-                    if let model = session.model?.id { Text(model) }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(session.displayTitle)
+                            .font(.body.weight(.medium))
+                            .lineLimit(2)
+                        HStack(spacing: 8) {
+                            Label(session.projectName, systemImage: "folder")
+                            if let agent = session.agent { Text(agent) }
+                            if let model = session.model?.id { Text(model) }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    }
+
+                    Spacer(minLength: 4)
+
+                    let pending = store.pendingCount(for: session.id)
+                    if pending > 0 {
+                        Text("\(pending)")
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.orange, in: Capsule())
+                            .foregroundStyle(.white)
+                    }
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
 
-            Spacer()
-
-            let pending = store.pendingCount(for: session.id)
-            if pending > 0 {
-                Text("\(pending)")
-                    .font(.caption2.bold())
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Color.orange, in: Capsule())
-                    .foregroundStyle(.white)
+            Button { store.toggleFavorite(session.id) } label: {
+                Image(systemName: store.isFavorite(session.id) ? "star.fill" : "star")
+                    .foregroundStyle(store.isFavorite(session.id) ? Color.yellow : Color.secondary.opacity(0.6))
             }
+            .buttonStyle(.plain)
         }
-        .contentShape(Rectangle())
         .padding(.vertical, 2)
     }
 }

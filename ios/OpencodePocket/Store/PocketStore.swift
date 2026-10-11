@@ -9,6 +9,20 @@ struct ServerInfo: Codable, Sendable {
 
 struct ActiveStatus: Codable, Sendable { var type: String? }
 
+enum DotState { case pending, running, done, idle }
+
+/// 轻量本地持久化（收藏 / 已读时间）。
+enum Prefs {
+    static var favorites: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: "opencode.pocket.favs") ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: "opencode.pocket.favs") }
+    }
+    static var viewed: [String: Double] {
+        get { (UserDefaults.standard.dictionary(forKey: "opencode.pocket.viewed") as? [String: Double]) ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: "opencode.pocket.viewed") }
+    }
+}
+
 struct MessagesResponse: Decodable {
     var data: [Message]
     var cursor: Cursor?
@@ -48,6 +62,12 @@ final class PocketStore {
     var lastError: String?
     var serverVersion: String?
     var refreshTick = 0
+
+    // 收藏 / 已读 / 消息缓存
+    var favorites: Set<String> = Prefs.favorites
+    var lastViewedAt: [String: Double] = Prefs.viewed
+    var messageCache: [String: [Message]] = [:]
+    var cursorCache: [String: String] = [:]
 
     // Connection form fields
     static let defaultServerURL = "https://pocket.example.com"
@@ -345,6 +365,32 @@ final class PocketStore {
         pendingPermissions.filter { $0.sessionID == sessionID }.count
             + pendingQuestions.filter { $0.sessionID == sessionID }.count
             + pendingForms.filter { $0.sessionID == sessionID }.count
+    }
+
+    // MARK: - 收藏 / 已读 / 状态圆点
+
+    func isFavorite(_ id: String) -> Bool { favorites.contains(id) }
+
+    func toggleFavorite(_ id: String) {
+        if favorites.contains(id) { favorites.remove(id) } else { favorites.insert(id) }
+        Prefs.favorites = favorites
+    }
+
+    func markViewed(_ id: String) {
+        lastViewedAt[id] = Date().timeIntervalSince1970 * 1000
+        Prefs.viewed = lastViewedAt
+    }
+
+    func isUnread(_ s: Session) -> Bool {
+        (s.time?.updated ?? 0) > (lastViewedAt[s.id] ?? 0)
+    }
+
+    /// 优先级：待办 > 运行中 > 未读完成 > 已读
+    func dotState(for s: Session) -> DotState {
+        if pendingCount(for: s.id) > 0 { return .pending }
+        if activeIDs.contains(s.id) { return .running }
+        if isUnread(s) { return .done }
+        return .idle
     }
 
     var distinctModels: [ModelRef] {

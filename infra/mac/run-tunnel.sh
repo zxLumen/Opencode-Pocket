@@ -19,8 +19,9 @@ while true; do
     -p "$SSH_PORT" \
     -o ControlMaster=no \
     -o ControlPath=none \
-    -o ServerAliveInterval=30 \
-    -o ServerAliveCountMax=3 \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=2 \
+    -o TCPKeepAlive=yes \
     -o ExitOnForwardFailure=yes \
     -o StrictHostKeyChecking=accept-new \
     -R "${BIND}:${PORT}:127.0.0.1:${PORT}" \
