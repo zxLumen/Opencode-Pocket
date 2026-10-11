@@ -18,6 +18,7 @@ secrets/
 # Apple / Xcode
 ios/*.xcodeproj
 ios/*.xcworkspace
+ios/OpencodePocket/Info.plist
 ios/DerivedData/
 ios/build/
 ios/.build/

@@ -39,6 +39,16 @@ Mac
 
 见 [`docs/mac-setup.md`](docs/mac-setup.md) 与 [`docs/vps-setup.md`](docs/vps-setup.md)。
 
+### iOS App
+
+```bash
+cd ios
+xcodegen generate          # 由 project.yml 生成 OpencodePocket.xcodeproj
+open OpencodePocket.xcodeproj
+```
+
+模拟器可直接运行；真机需在 Xcode 里设置 `DEVELOPMENT_TEAM`。
+
 ## 关键事实（已实测 opencode v2.0.26）
 
 - opencode v2 默认会为当前用户启动**一个共享后台 server**，所有客户端自动接入 → 多工程天然聚合。
