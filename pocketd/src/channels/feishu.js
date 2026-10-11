@@ -1,38 +1,23 @@
 import crypto from 'node:crypto';
 
-const META = {
-  permission: { color: 'orange', emoji: '🔒', title: '需要审批' },
-  question: { color: 'indigo', emoji: '❓', title: '需要回答' },
-  error: { color: 'red', emoji: '🚨', title: '会话出错' },
-  done: { color: 'green', emoji: '✅', title: '会话完成' },
-  running: { color: 'grey', emoji: '▶️', title: '开始运行' },
+const EMOJI = {
+  permission: '🔒',
+  question: '❓',
+  error: '🚨',
+  done: '✅',
+  running: '▶️',
 };
 
-function buildCard(n) {
-  const meta = META[n.kind] || { color: 'blue', emoji: '🔔', title: '通知' };
-  const title = `${meta.emoji} ${n.title || meta.title}`;
-
-  const lines = [];
-  if (n.sessionTitle) lines.push(`**会话**：${n.sessionTitle}`);
-  if (n.directory) lines.push(`**目录**：${n.directory}`);
-  const head = lines.join('\n');
-  const detail = n.body || '';
-  const content = head && detail ? `${head}\n\n${detail}` : (head || detail || '（无内容）');
-
-  return {
-    config: { wide_screen_mode: true },
-    header: { template: meta.color, title: { tag: 'plain_text', content: title } },
-    elements: [
-      { tag: 'div', text: { tag: 'lark_md', content } },
-      { tag: 'hr' },
-      { tag: 'note', elements: [{ tag: 'plain_text', content: 'Opencode-Pocket' }] },
-    ],
-  };
-}
-
 /**
- * 飞书自定义机器人通道（交互卡片：标题栏配色 + lark_md 加粗 + emoji）。
- * 若配置了 secret（签名校验）：stringToSign = `${timestamp}\n${secret}`，
+ * 飞书自定义机器人通道 —— 纯文本（保证系统通知预览里能看到会话名与内容）。
+ * 排版：
+ *   🔒 需要审批
+ *   会话：xxx
+ *   目录：/path
+ *
+ *   正文…
+ *
+ * 签名（若配置 secret）：stringToSign=`${timestamp}\n${secret}`，
  * sign = base64(HMAC-SHA256(key=stringToSign, data=""))。
  */
 export function feishuChannel(cfg) {
@@ -40,7 +25,14 @@ export function feishuChannel(cfg) {
     name: 'feishu',
     get enabled() { return Boolean(cfg.feishu.webhook); },
     async send(n) {
-      const body = { msg_type: 'interactive', card: buildCard(n) };
+      const lines = [`${EMOJI[n.kind] || '🔔'} ${n.title || '通知'}`];
+      const meta = [];
+      if (n.sessionTitle) meta.push(`会话：${n.sessionTitle}`);
+      if (n.directory) meta.push(`目录：${n.directory}`);
+      if (meta.length) lines.push(meta.join('\n'));
+      if (n.body) lines.push('', n.body);
+
+      const body = { msg_type: 'text', content: { text: lines.join('\n') } };
       if (cfg.feishu.secret) {
         const timestamp = Math.floor(Date.now() / 1000).toString();
         const stringToSign = `${timestamp}\n${cfg.feishu.secret}`;
