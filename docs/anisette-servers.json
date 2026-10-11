@@ -1,0 +1,8 @@
+{
+  "servers": [
+    {
+      "name": "my-VPS (anisette-v3)",
+      "address": "https://anisette.example.com/CHANGE-ME-SECRET-PATH"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# anisette-v3 —— 给自己手机 SideStore 提供 anisette 数据的独立服务。
+# 镜像官方：Dadoum/anisette-v3-server（支持 SideStore 的 v1 + v3 协议）。
+# 独立于博客那套 compose 部署，避免动主栈：
+#   cd infra/vps/anisette && sudo docker compose up -d
+services:
+  anisette-v3:
+    image: dadoum/anisette-v3-server
+    restart: unless-stopped
+    container_name: anisette-v3
+    ports:
+      - "6969:6969"
+    volumes:
+      - anisette-v3_data:/home/Alcoholic/.config/anisette-v3/lib/
+
+volumes:
+  anisette-v3_data:

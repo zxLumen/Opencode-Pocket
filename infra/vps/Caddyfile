@@ -42,3 +42,23 @@ code-sandbox.{$DOMAIN} {
 		flush_interval -1
 	}
 }
+
+# 私有：自建 anisette-v3（给 SideStore 自签用；见 docs/ios-sidestore.md 与 infra/vps/anisette/）。
+# 安全：随机长路径才放行（handle_path 剥离前缀），其余一律 404；端口 6969 由 ufw 限制为 Docker 网段。
+# 部署前把 CHANGE-ME-SECRET-PATH 换成你自己的随机串，三处保持一致：
+#   本段 / infra/vps/anisette/README.md / docs/anisette-servers.json
+anisette.{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		-Server
+	}
+
+	handle_path /CHANGE-ME-SECRET-PATH* {
+		reverse_proxy host.docker.internal:6969
+	}
+
+	handle {
+		respond 404
+	}
+}

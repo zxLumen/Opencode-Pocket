@@ -1,0 +1,24 @@
+{
+  "name": "Opencode-Pocket",
+  "identifier": "cn.zxlumen.opencodepocket.source",
+  "subtitle": "Opencode-Pocket（SideStore 源）",
+  "description": "由 GitHub Actions 自动构建的无签名 IPA，SideStore 会用它 + 你的免费 Apple ID 在手机上签名安装。添加后刷新源即可安装 / 更新。",
+  "iconURL": "https://raw.githubusercontent.com/zxLumen/Opencode-Pocket/main/docs/icon.png",
+  "website": "https://github.com/zxLumen/Opencode-Pocket",
+  "tintColor": "#22D3EE",
+  "apps": [
+    {
+      "name": "Opencode-Pocket",
+      "bundleIdentifier": "cn.zxlumen.opencodepocket",
+      "developerName": "zxLumen",
+      "subtitle": "opencode 手机控制台",
+      "localizedDescription": "实时跟进 opencode 所有 session，在手机上完成审批、回答提问、下达指令、切换模型/模式。",
+      "iconURL": "https://raw.githubusercontent.com/zxLumen/Opencode-Pocket/main/docs/icon.png",
+      "version": "0.1.0",
+      "versionDate": "2026-10-12",
+      "size": 520000,
+      "downloadURL": "https://github.com/zxLumen/Opencode-Pocket/releases/latest/download/OpencodePocket.ipa",
+      "minOSVersion": "17.0"
+    }
+  ]
+}

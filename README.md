@@ -49,6 +49,10 @@ open OpencodePocket.xcodeproj
 
 模拟器可直接运行；真机需在 Xcode 里设置 `DEVELOPMENT_TEAM`。
 
+> **免费侧载（无 Mac、无付费账号）**：见 [`docs/ios-sidestore.md`](docs/ios-sidestore.md)——
+> GitHub Actions 自动构建无签名 IPA → 手机 SideStore 用免费 Apple ID 签名安装并自动续签。
+> 服务器端配套：`infra/vps/anisette/`（自建 anisette-v3）+ `infra/vps/Caddyfile` 的 `anisette.{$DOMAIN}` 段。
+
 ## 关键事实（已实测 opencode v2.0.26）
 
 - opencode v2 默认会为当前用户启动**一个共享后台 server**，所有客户端自动接入 → 多工程天然聚合。

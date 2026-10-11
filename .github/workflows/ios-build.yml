@@ -1,0 +1,87 @@
+name: ios-build
+
+# 把 opencode 会话里改的 iOS 代码变成「无签名 IPA」发布到 Releases，
+# 供 iPhone 上的 SideStore 下载并用免费 Apple ID 在本地签名安装。
+# 详见 docs/ios-sidestore.md。
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-ipa:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build unsigned app
+        working-directory: ios
+        run: |
+          xcodebuild \
+            -project OpencodePocket.xcodeproj \
+            -scheme OpencodePocket \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath .build/release \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package IPA (无签名)
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          APP_DIR=".build/release/Build/Products/Release-iphoneos/OpencodePocket.app"
+          ls -d "$APP_DIR"
+          rm -rf .build/ipa .build/OpencodePocket.ipa
+          mkdir -p .build/ipa/Payload
+          cp -R "$APP_DIR" .build/ipa/Payload/
+          (cd .build/ipa && zip -q -r ../OpencodePocket.ipa Payload)
+          echo "IPA_PATH=$PWD/.build/OpencodePocket.ipa"
+          echo "IPA_SIZE=$(stat -f%z .build/OpencodePocket.ipa)"
+
+      - name: Publish release & bump source 版本号
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          IPA="ios/.build/OpencodePocket.ipa"
+          VERSION="0.1.0+${{ github.run_number }}"
+          DATE="$(date -u +%Y-%m-%d)"
+          SIZE="$(stat -f%z "$IPA")"
+          echo "::notice::$IPA $VERSION $SIZE"
+
+          # 固定 tag ios-latest：不存在则创建，存在则覆盖上传
+          gh release create ios-latest "$IPA" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "OpencodePocket (latest)" \
+              --notes "自动构建的无签名 IPA，供 SideStore 安装。" 2>/dev/null \
+            || gh release upload ios-latest "$IPA" \
+              --clobber --repo "$GITHUB_REPOSITORY"
+
+          # 把新版本号写回 docs/apps.json，SideStore 才会提示「有更新」
+          python3 .github/scripts/bump-apps-json.py "$VERSION" "$DATE" "$SIZE"
+
+          if ! git diff --quiet docs/apps.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add docs/apps.json
+            git commit -m "chore(ios): 源信息升级到 $VERSION"
+            git push origin HEAD:main
+          fi

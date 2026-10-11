@@ -46,3 +46,11 @@ targets:
           - CFBundleURLName: cn.zxlumen.opencodepocket
             CFBundleURLSchemes:
               - opencodepocket
+
+schemes:
+  OpencodePocket:
+    build:
+      targets:
+        OpencodePocket: all
+    run:
+      config: Debug
