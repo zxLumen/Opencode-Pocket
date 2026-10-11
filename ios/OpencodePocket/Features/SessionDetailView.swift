@@ -3,9 +3,11 @@ import UIKit
 
 private struct BottomYKey: PreferenceKey {
     static var defaultValue: CGFloat = .greatestFiniteMagnitude
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = min(value, nextValue())
-    }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = min(value, nextValue()) }
+}
+private struct TopYKey: PreferenceKey {
+    static var defaultValue: CGFloat = -.greatestFiniteMagnitude
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 private func dismissKeyboard() {
@@ -16,7 +18,11 @@ struct SessionDetailView: View {
     let sessionID: String
     @Environment(PocketStore.self) private var store
     @State private var messages: [Message] = []
+    @State private var olderCursor: String?
+    @State private var loadingOlder = false
     @State private var follow = true
+
+    private let pageSize = 25
 
     private var session: Session? { store.session(sessionID) }
     private var permissions: [PendingPermission] { store.pendingPermissions.filter { $0.sessionID == sessionID } }
@@ -25,47 +31,52 @@ struct SessionDetailView: View {
     private var isRunning: Bool { store.activeIDs.contains(sessionID) }
     private var live: String { store.liveText[sessionID] ?? "" }
     private var liveR: String { store.liveReasoning[sessionID] ?? "" }
+    private var visibleMessages: [Message] { messages.filter { $0.type != "synthetic" } }
 
     var body: some View {
         GeometryReader { outer in
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
+                        Color.clear
+                            .frame(height: 1)
+                            .background(GeometryReader { g in
+                                Color.clear.preference(key: TopYKey.self, value: g.frame(in: .named("scroll")).minY)
+                            })
+
+                        if loadingOlder {
+                            HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
+                        }
+
                         header
 
                         if let err = store.lastError, !err.isEmpty {
-                            Label(err, systemImage: "exclamationmark.triangle")
-                                .font(.caption).foregroundStyle(.red)
+                            Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
                         }
 
                         ForEach(permissions) { PermissionCard(permission: $0) }
                         ForEach(questions) { QuestionCard(question: $0) }
                         ForEach(forms) { FormCard(form: $0) }
 
-                        ForEach(messages.filter { $0.type != "synthetic" }) { message in
+                        ForEach(visibleMessages) { message in
                             MessageRow(message: message).id(message.id)
                         }
 
-                        if !live.isEmpty {
-                            LiveBubble(text: live).id("live")
-                        }
+                        if !live.isEmpty { LiveBubble(text: live).id("live") }
+
                         if !liveR.isEmpty {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Label("实时思考", systemImage: "brain")
-                                    .font(.caption2).foregroundStyle(.secondary)
+                            DisclosureGroup("实时思考") {
                                 MarkdownText(text: liveR).font(.caption).foregroundStyle(.secondary)
                             }
+                            .font(.caption2)
                         }
 
                         Color.clear
                             .frame(height: 1)
                             .id("bottom")
-                            .background(
-                                GeometryReader { g in
-                                    Color.clear.preference(key: BottomYKey.self,
-                                                           value: g.frame(in: .named("scroll")).minY)
-                                }
-                            )
+                            .background(GeometryReader { g in
+                                Color.clear.preference(key: BottomYKey.self, value: g.frame(in: .named("scroll")).minY)
+                            })
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
@@ -74,9 +85,14 @@ struct SessionDetailView: View {
                 .coordinateSpace(name: "scroll")
                 .scrollDismissesKeyboard(.immediately)
                 .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in follow = false })
-                .onTapGesture { dismissKeyboard() }   // 点空白处收起键盘
+                .onTapGesture { dismissKeyboard() }
                 .onPreferenceChange(BottomYKey.self) { minY in
                     if minY <= outer.size.height + 30 { follow = true }
+                }
+                .onPreferenceChange(TopYKey.self) { minY in
+                    if minY > -60, olderCursor?.isEmpty == false {
+                        Task { await loadOlder() }
+                    }
                 }
                 .onChange(of: messages.count) { _, _ in if follow { scrollToBottom(proxy) } }
                 .onChange(of: live) { _, _ in if follow { scrollToBottom(proxy) } }
@@ -87,11 +103,10 @@ struct SessionDetailView: View {
                     while isRunning && !Task.isCancelled {
                         try? await Task.sleep(nanoseconds: 3_000_000_000)
                         if Task.isCancelled { break }
-                        await reload()
+                        await refreshNewest()
                         if follow { scrollToBottom(proxy) }
                     }
                 }
-                .refreshable { await reload() }
             }
         }
         .navigationTitle(session?.displayTitle ?? "会话")
@@ -112,11 +127,35 @@ struct SessionDetailView: View {
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
-        if animated {
-            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
-        } else {
-            proxy.scrollTo("bottom", anchor: .bottom)
-        }
+        if animated { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) } }
+        else { proxy.scrollTo("bottom", anchor: .bottom) }
+    }
+
+    private func reload() async {
+        let page = await store.loadMessages(sessionID: sessionID, limit: pageSize)
+        messages = page.items.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
+        olderCursor = page.previous
+    }
+
+    /// 运行中只刷新「最新一页」，保留已加载的更早内容，避免打断/回退。
+    private func refreshNewest() async {
+        let page = await store.loadMessages(sessionID: sessionID, limit: pageSize)
+        let newest = page.items.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
+        let existing = Set(messages.map { $0.id })
+        let fresh = newest.filter { !existing.contains($0.id) }
+        if !fresh.isEmpty { messages.append(contentsOf: fresh) }
+        if olderCursor == nil { olderCursor = page.previous }
+    }
+
+    private func loadOlder() async {
+        guard !loadingOlder, let cursor = olderCursor, !cursor.isEmpty else { return }
+        loadingOlder = true
+        let page = await store.loadMessages(sessionID: sessionID, limit: pageSize, cursor: cursor)
+        let older = page.items.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
+        let existing = Set(messages.map { $0.id })
+        messages = older.filter { !existing.contains($0.id) } + messages
+        olderCursor = page.previous
+        loadingOlder = false
     }
 
     private var header: some View {
@@ -155,11 +194,6 @@ struct SessionDetailView: View {
             }
         } label: { Image(systemName: "cpu") }
     }
-
-    private func reload() async {
-        let list = await store.loadMessages(sessionID: sessionID)
-        messages = list.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
-    }
 }
 
 struct LiveBubble: View {
@@ -197,8 +231,7 @@ struct MessageRow: View {
             if message.type == "agent-switched" {
                 HStack(spacing: 8) {
                     Divider().frame(width: 16)
-                    Text("切换 Agent → \(message.agent ?? "?")")
-                        .font(.caption2).foregroundStyle(.secondary)
+                    Text("切换 Agent → \(message.agent ?? "?")").font(.caption2).foregroundStyle(.secondary)
                     Divider()
                 }
             } else {
@@ -220,9 +253,7 @@ struct MessageRow: View {
                         ForEach(Array(tools.enumerated()), id: \.offset) { _, t in
                             HStack(spacing: 6) {
                                 Text("🛠 \(t.name)").font(.caption)
-                                if let s = t.status {
-                                    Text(s).font(.caption2).foregroundStyle(statusColor(s))
-                                }
+                                if let s = t.status { Text(s).font(.caption2).foregroundStyle(statusColor(s)) }
                             }
                         }
                     }

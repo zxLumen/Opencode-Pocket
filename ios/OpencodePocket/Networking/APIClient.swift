@@ -27,16 +27,18 @@ struct APIClient: Sendable {
         self.authorization = "Basic \(token)"
     }
 
-    private func url(for path: String) -> URL {
+    private func url(for path: String, query: [URLQueryItem]) -> URL {
         var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)!
         var p = comps.path
         if p.hasSuffix("/") { p = String(p.dropLast()) }
         comps.path = p + path
+        if !query.isEmpty { comps.queryItems = query }
         return comps.url ?? base
     }
 
-    func request(_ path: String, method: String = "GET", json: [String: Any]? = nil) async throws -> Data {
-        var req = URLRequest(url: url(for: path))
+    func request(_ path: String, method: String = "GET",
+                 query: [URLQueryItem] = [], json: [String: Any]? = nil) async throws -> Data {
+        var req = URLRequest(url: url(for: path, query: query))
         req.httpMethod = method
         req.setValue(authorization, forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -52,22 +54,22 @@ struct APIClient: Sendable {
         return data
     }
 
-    func get<T: Decodable>(_ path: String, as type: T.Type) async throws -> T {
-        let data = try await request(path)
+    func get<T: Decodable>(_ path: String, query: [URLQueryItem] = [], as type: T.Type) async throws -> T {
+        let data = try await request(path, query: query)
         do { return try JSONDecoder().decode(T.self, from: data) }
         catch { throw APIError.decode(String(describing: error)) }
     }
 
     /// GET that unwraps a `{ "data": T }` envelope, falling back to bare T.
-    func getData<T: Decodable>(_ path: String, as type: T.Type) async throws -> T {
-        let data = try await request(path)
+    func getData<T: Decodable>(_ path: String, query: [URLQueryItem] = [], as type: T.Type) async throws -> T {
+        let data = try await request(path, query: query)
         if let wrapped = try? JSONDecoder().decode(Wrapped<T>.self, from: data) { return wrapped.data }
         do { return try JSONDecoder().decode(T.self, from: data) }
         catch { throw APIError.decode(String(describing: error)) }
     }
 
-    func getRawJSON(_ path: String) async throws -> Any {
-        let data = try await request(path)
+    func getRawJSON(_ path: String, query: [URLQueryItem] = []) async throws -> Any {
+        let data = try await request(path, query: query)
         return try JSONSerialization.jsonObject(with: data)
     }
 

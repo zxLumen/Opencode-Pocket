@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ComposerView: View {
     let sessionID: String
@@ -27,6 +28,8 @@ struct ComposerView: View {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
         text = ""
+        // 发送后立即收起键盘（与点击别处效果一致）
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         Task { await store.sendPrompt(sessionID: sessionID, text: value) }
     }
 }

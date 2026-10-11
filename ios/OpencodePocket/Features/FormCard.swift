@@ -69,9 +69,32 @@ struct FormCard: View {
                 }
 
             default:
-                TextField("输入…", text: bindingString(field.key), axis: .vertical)
-                    .lineLimit(1...4)
-                    .textFieldStyle(.roundedBorder)
+                if let opts = field.options, !opts.isEmpty {
+                    // 带选项的字符串字段（question 的形态）：选项即答案，另可自定义
+                    ForEach(opts, id: \.value) { opt in
+                        Button { strings[field.key] = opt.value } label: {
+                            HStack {
+                                Image(systemName: strings[field.key] == opt.value ? "largecircle.fill.circle" : "circle")
+                                VStack(alignment: .leading) {
+                                    Text(opt.label)
+                                    if let d = opt.description, !d.isEmpty {
+                                        Text(d).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if field.custom == true {
+                        TextField("或输入自定义…", text: bindingString(field.key))
+                            .textFieldStyle(.roundedBorder)
+                    }
+                } else {
+                    TextField("输入…", text: bindingString(field.key), axis: .vertical)
+                        .lineLimit(1...4)
+                        .textFieldStyle(.roundedBorder)
+                }
             }
         }
     }

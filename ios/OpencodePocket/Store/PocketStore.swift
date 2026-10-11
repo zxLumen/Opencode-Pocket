@@ -9,6 +9,12 @@ struct ServerInfo: Codable, Sendable {
 
 struct ActiveStatus: Codable, Sendable { var type: String? }
 
+struct MessagesResponse: Decodable {
+    var data: [Message]
+    var cursor: Cursor?
+    struct Cursor: Decodable { var previous: String?; var next: String? }
+}
+
 private struct PermissionItemDTO: Decodable {
     var id: String
     var sessionID: String?
@@ -122,30 +128,48 @@ final class PocketStore {
 
     func loadPending() async {
         guard let c = try? client() else { return }
-        if let raw = try? await c.getRawJSON("/api/permission/request") {
-            let items = Self.array(from: raw).compactMap { try? JSONDecoder().decode(PermissionItemDTO.self, from: JSONSerialization.data(withJSONObject: $0)) }
-            pendingPermissions = items.map {
-                PendingPermission(
-                    id: $0.id,
-                    sessionID: $0.sessionID,
-                    action: $0.action,
-                    resources: $0.resources ?? [],
-                    title: $0.message ?? Self.permissionTitle($0),
-                    createdAt: nil
-                )
+        // 审批/表单都是按 location（目录）作用域的；服务器默认 location 是自身 cwd，
+        // 因此要针对各会话所在目录逐个查询并合并。
+        var dirs = Set(sessions.compactMap { $0.directory })
+        dirs.insert("")  // 空 = 默认 location
+
+        var perms: [String: PendingPermission] = [:]
+        var forms: [String: FormInfo] = [:]
+
+        for dir in dirs {
+            let q = dir.isEmpty ? [] : [URLQueryItem(name: "location[directory]", value: dir)]
+
+            if let raw = try? await c.getRawJSON("/api/permission/request", query: q) {
+                for item in Self.array(from: raw) {
+                    if let dto = try? JSONDecoder().decode(PermissionItemDTO.self, from: JSONSerialization.data(withJSONObject: item)) {
+                        perms[dto.id] = PendingPermission(id: dto.id, sessionID: dto.sessionID, action: dto.action,
+                                                          resources: dto.resources ?? [],
+                                                          title: dto.message ?? Self.permissionTitle(dto), createdAt: nil)
+                    }
+                }
+            }
+            if let list = try? await c.getData("/api/form", query: q, as: [FormInfo].self) {
+                for f in list { forms[f.id] = f }
             }
         }
-        // question 在本版本实现为 form
-        if let forms = try? await c.getData("/api/form", as: [FormInfo].self) {
-            pendingForms = forms
-        }
+
+        pendingPermissions = Array(perms.values)
+        pendingForms = Array(forms.values)
         pendingQuestions = []
     }
 
-    func loadMessages(sessionID: String) async -> [Message] {
-        guard let c = try? client() else { return [] }
-        do { return try await c.getData("/api/session/\(sessionID)/message", as: [Message].self) }
-        catch { return [] }
+    /// 拉取一页消息（默认最新 N 条，倒序返回），并给出更早一页的 cursor。
+    func loadMessages(sessionID: String, limit: Int = 25, cursor: String? = nil) async -> (items: [Message], previous: String?) {
+        guard let c = try? client() else { return ([], nil) }
+        var q = [URLQueryItem(name: "limit", value: String(limit)),
+                 URLQueryItem(name: "order", value: "desc")]
+        if let cursor, !cursor.isEmpty { q.append(URLQueryItem(name: "cursor", value: cursor)) }
+        do {
+            let r = try await c.getData("/api/session/\(sessionID)/message", query: q, as: MessagesResponse.self)
+            return (r.data, r.cursor?.previous)
+        } catch {
+            return ([], nil)
+        }
     }
 
     // MARK: - Events
@@ -172,8 +196,10 @@ final class PocketStore {
                 guard let self else { break }
                 await self.loadActive()
                 self.pollTick += 1
-                if self.pollTick % 2 == 0 { await self.loadSessions() }
-                await self.loadPending()
+                if self.pollTick % 2 == 0 {
+                    await self.loadSessions()
+                    await self.loadPending()
+                }
             }
         }
     }

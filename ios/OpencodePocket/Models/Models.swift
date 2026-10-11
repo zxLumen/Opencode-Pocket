@@ -184,6 +184,7 @@ struct FormField: Codable, Hashable, Sendable {
     var description: String?
     var required: Bool?
     var hidden: Bool?
+    var custom: Bool?
     var options: [FormOption]?
     var url: String?
 
