@@ -32,9 +32,22 @@ Mac: 已停用 launchd(serve/tunnel/pocketd)。改用 VSCode Remote-SSH 连 VPS�
 
 ## 日常用法（Mac）
 
-1. VSCode 装 **Remote - SSH** 扩展 → 连 `ubuntu@your-vps-host` → 打开 `~/Projects/<工程>`。
-2. 在 VPS 终端里跑 `oc`（= `opencode --server http://127.0.0.1:4096`）或其他命令。
-3. 手机 App 打开即为同一个 server 的会话。
+**方式一：本地客户端连服务器（推荐，TUI 流畅）**
+```bash
+ocr     # = OPENCODE_PASSWORD=YOUR_SERVER_PASSWORD opencode --server https://pocket.example.com
+```
+（别名已写入 `~/.zshrc`；本地渲染、连服务器，Mac 上的应用也能捕获这个本地进程。）
+
+**方式二：VSCode Remote-SSH + 远程窗口里开本地终端**
+- `Cmd+Shift+P` → **Terminal: Create New Integrated Terminal (Local)** → 在远程窗口里开一个**本地**终端；
+- 在里面跑 `ocr`；远程窗口同时看远程文件改动。
+- 该命令 VSCode 自带（防远端偷偷开本地终端，仅命令面板可调）。
+
+**方式三：服务器端 TUI（较重，VPS 2C 会卡）**
+```bash
+ssh ubuntu@your-vps-host
+oc      # = OPENCODE_PASSWORD=YOUR_SERVER_PASSWORD opencode --server http://127.0.0.1:4096
+```
 
 ## 运维
 
