@@ -52,7 +52,7 @@ export function evaluate(event) {
     };
   }
 
-  // 出错
+  // 出错 / 打断
   if (type.includes('execution.failed') || type.includes('step.failed') || type === 'session.error') {
     const msg = firstString(data.error?.message, data.message, data.error?.name);
     return {
@@ -60,11 +60,25 @@ export function evaluate(event) {
       notification: { ...base, title: '会话出错', body: msg || 'session error', priority: 'urgent', tags: ['rotating_light'] },
     };
   }
+  if (type.includes('execution.interrupted')) {
+    return {
+      key: `interrupted:${sessionID}:${event.id || Date.now()}`,
+      notification: { ...base, title: '会话已打断', body: '执行被中断', priority: 'default', tags: ['stop_sign'] },
+    };
+  }
+
+  // 开始运行
+  if (config.notifyStatus && type === 'session.execution.started') {
+    return {
+      key: `start:${sessionID}:${event.id || Date.now()}`,
+      notification: { ...base, title: '会话开始运行', body: '开始执行任务', priority: 'low', tags: ['arrow_forward'] },
+    };
+  }
 
   // 完成 / 空闲
-  if (config.notifyIdle && type === 'session.idle') {
+  if (config.notifyIdle && (type === 'session.idle' || type === 'session.execution.succeeded')) {
     return {
-      key: `idle:${sessionID}:${data.idle ?? event.id ?? Date.now()}`,
+      key: `done:${sessionID}:${data.idle ?? event.id ?? Date.now()}`,
       notification: { ...base, title: '会话完成', body: '已空闲，等待你的下一步', priority: 'default', tags: ['white_check_mark'] },
     };
   }

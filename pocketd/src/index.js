@@ -60,6 +60,9 @@ async function main() {
       cache.refresh();
     }
     const result = evaluate(event);
+    if (/session\.(execution|idle)/.test(event?.type || '')) {
+      log.info(`event: ${event.type} session=${event?.data?.sessionID ?? event?.sessionID ?? '-'}`)
+    }
     if (!result) return;
 
     const now = Date.now();
