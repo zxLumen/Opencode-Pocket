@@ -16,9 +16,28 @@ pocket.{$DOMAIN} {
 	encode zstd gzip
 	header {
 		X-Content-Type-Options nosniff
+		# 若被主站 iframe 嵌入，只放行主站（与自身）内嵌
+		Content-Security-Policy "frame-ancestors 'self' https://{$DOMAIN}"
 		-Server
 	}
 	reverse_proxy host.docker.internal:4096 {
+		# SSE（/api/event）必须关闭缓冲
+		flush_interval -1
+	}
+}
+
+# 公开：访客沙盒 opencode web（独立容器 opencode-play，只接 play 内网；见 docs/vps-sandbox.md）。
+# 无密码开放（匿名访客可玩），资源/预算/隔离都在容器与网关侧兜底。
+code-sandbox.{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	reverse_proxy opencode-play:4096 {
 		# SSE（/api/event）必须关闭缓冲
 		flush_interval -1
 	}
