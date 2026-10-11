@@ -54,10 +54,6 @@ struct SessionDetailView: View {
                             Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
                         }
 
-                        ForEach(permissions) { PermissionCard(permission: $0) }
-                        ForEach(questions) { QuestionCard(question: $0) }
-                        ForEach(forms) { FormCard(form: $0) }
-
                         ForEach(visibleMessages) { message in
                             MessageRow(message: message).id(message.id)
                         }
@@ -70,6 +66,11 @@ struct SessionDetailView: View {
                             }
                             .font(.caption2)
                         }
+
+                        // 待办（审批 / 提问）放在底部，靠近输入框
+                        ForEach(permissions) { PermissionCard(permission: $0) }
+                        ForEach(questions) { QuestionCard(question: $0) }
+                        ForEach(forms) { FormCard(form: $0) }
 
                         Color.clear
                             .frame(height: 1)
