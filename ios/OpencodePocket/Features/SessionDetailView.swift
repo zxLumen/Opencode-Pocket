@@ -43,6 +43,7 @@ struct SessionDetailView: View {
     @State private var messages: [Message] = []
     @State private var olderCursor: String?
     @State private var loadingOlder = false
+    @State private var didInitialScroll = false
 
     // 偏移量 + 高度，用于精确判定"是否在底部"（iOS17 可用）
     @State private var topMinY: CGFloat = 0
@@ -131,6 +132,13 @@ struct SessionDetailView: View {
                 .onPreferenceChange(TopYKey.self) { topMinY = $0 }
                 .onPreferenceChange(ContentHKey.self) { contentHeight = $0 }
                 .onPreferenceChange(ViewHKey.self) { viewportHeight = $0 }
+                .onChange(of: contentHeight) { _, h in
+                    // 布局刚完成：首次立即到底（不依赖 atBottom，因为初始在顶部）
+                    if !didInitialScroll, h > 0 {
+                        didInitialScroll = true
+                        scrollToBottom(proxy, animated: false)
+                    }
+                }
                 .onPreferenceChange(TopYKey.self) { minY in
                     if minY > -60, olderCursor?.isEmpty == false, !loadingOlder {
                         Task { await loadOlder() }
@@ -143,7 +151,15 @@ struct SessionDetailView: View {
                     seedFromCache()
                     store.markViewed(sessionID)
                     if messages.isEmpty { await reload() } else { await refreshNewest() }
-                    scrollToBottom(proxy, animated: false)   // 初次定位到底部
+                    // 首次进入：多次重试确保到底（覆盖网络/布局时序）
+                    if !didInitialScroll {
+                        for _ in 0..<8 {
+                            scrollToBottom(proxy, animated: false)
+                            try? await Task.sleep(nanoseconds: 80_000_000)
+                            if didInitialScroll { break }
+                        }
+                        didInitialScroll = true
+                    }
                     while !Task.isCancelled {
                         try? await Task.sleep(nanoseconds: 2_000_000_000)
                         if Task.isCancelled { break }
