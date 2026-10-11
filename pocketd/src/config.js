@@ -39,6 +39,11 @@ export const config = {
     topic: env.NTFY_TOPIC || '',
     token: env.NTFY_TOKEN || '',
   },
+  feishu: {
+    webhook: env.FEISHU_WEBHOOK || '',
+    secret: env.FEISHU_SECRET || '',
+    mention: env.FEISHU_MENTION || '<at user_id="all">所有人</at> ',
+  },
 };
 
 export function assertConfig() {
