@@ -13,7 +13,7 @@ final class SpeechRecognizer {
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "zh-CN")) ?? SFSpeechRecognizer()
+    private var recognizer: SFSpeechRecognizer?
 
     private var committed = ""   // 已定稿文本
     private var current = ""     // 当前片段
@@ -22,12 +22,28 @@ final class SpeechRecognizer {
         if isRecording { stop() } else { Task { await start() } }
     }
 
+    /// 依次尝试：中文 → 设备语言 → 系统默认，取第一个可用的。
+    private static func pickRecognizer() -> SFSpeechRecognizer? {
+        let candidates: [SFSpeechRecognizer?] = [
+            SFSpeechRecognizer(locale: Locale(identifier: "zh-CN")),
+            SFSpeechRecognizer(locale: Locale.current),
+            SFSpeechRecognizer(),
+        ]
+        let all = candidates.compactMap { $0 }
+        return all.first(where: { $0.isAvailable }) ?? all.first
+    }
+
     func start() async {
         errorText = nil
         committed = ""
         current = ""
         transcript = ""
-        guard let recognizer, recognizer.isAvailable else { errorText = "语音识别不可用"; return }
+
+        recognizer = Self.pickRecognizer()
+        guard let recognizer, recognizer.isAvailable else {
+            errorText = "语音识别不可用（检查网络，或系统设置里的听写/语言）"
+            return
+        }
 
         let speechOK = await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
             SFSpeechRecognizer.requestAuthorization { status in c.resume(returning: status == .authorized) }
@@ -64,8 +80,6 @@ final class SpeechRecognizer {
         guard isRecording, let recognizer else { return }
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        request.addsPunctuation = true
-        request.taskHint = .dictation   // 听写模式：对话式、中英混更好
         recognitionRequest = request
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in

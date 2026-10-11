@@ -45,6 +45,24 @@ struct ComposerView: View {
                 }
             }
 
+            if let e = speech.errorText, !e.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle")
+                    Text(e)
+                    Spacer()
+                }
+                .font(.caption).foregroundStyle(.orange)
+                .padding(.horizontal, 14)
+            } else if speech.isRecording {
+                HStack(spacing: 6) {
+                    Circle().fill(.red).frame(width: 8, height: 8)
+                    Text("聆听中… 说出你的指令")
+                    Spacer()
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.horizontal, 14)
+            }
+
             HStack(alignment: .bottom, spacing: 8) {
                 PhotosPicker(selection: $photoItems, maxSelectionCount: 10, matching: .images) {
                     Image(systemName: "photo")
