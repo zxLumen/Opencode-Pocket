@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# 真机部署：构建 → 安装 → 启动（免费个人账号，automatic signing）。
+# 注意：需要 iPhone 对 Mac 可达。自家网络若为 SG659HZ 光猫，5G↔5G 被隔离，
+#       请让 Mac 与 iPhone 处于不同频段（通常 Mac 连 2.4G / iPhone 连 5G）。
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+PROJECT="OpencodePocket.xcodeproj"
+SCHEME="OpencodePocket"
+BUNDLE_ID="cn.zxlumen.opencodepocket"
+DEVICE_UDID="${DEVICE_UDID:-00008030-000804100CE8802E}"
+DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-T8TG4WAR43}"
+APP=".build/device/Build/Products/Debug-iphoneos/OpencodePocket.app"
+
+if [ ! -d "$PROJECT" ]; then
+  echo "==> 生成 Xcode 工程"
+  command -v xcodegen >/dev/null || { echo "需要 xcodegen"; exit 1; }
+  xcodegen generate
+fi
+
+echo "==> 真机构建 ($DEVICE_UDID)"
+xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
+  -destination "id=$DEVICE_UDID" -derivedDataPath .build/device build \
+  CODE_SIGN_STYLE=Automatic CODE_SIGNING_ALLOWED=YES -allowProvisioningUpdates \
+  DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM"
+
+echo "==> 真机安装并启动"
+xcrun devicectl device install app --device "$DEVICE_UDID" "$APP"
+xcrun devicectl device process terminate --device "$DEVICE_UDID" "$BUNDLE_ID" 2>/dev/null || true
+xcrun devicectl device process launch --device "$DEVICE_UDID" "$BUNDLE_ID"
+
+echo "==> 完成"

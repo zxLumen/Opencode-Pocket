@@ -1,0 +1,5 @@
+# 复制为 wifi.local.sh（本文件 gitignore）并填入你的 Wi-Fi 密码。
+# 用于自动续签时在 2.4G / 5G 之间切换频段（同频段客户端被光猫隔离）。
+WIFI_PRIMARY_SSID="CU_77qd_5G"
+WIFI_ALT_SSID="CU_77qd"
+WIFI_PASSWORD=""
