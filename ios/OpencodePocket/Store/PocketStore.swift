@@ -304,6 +304,34 @@ final class PocketStore {
         activeIDs.remove(sessionID)
     }
 
+    // MARK: - 新建会话
+
+    var knownDirectories: [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for s in sessions {
+            if let d = s.directory, !d.isEmpty, !seen.contains(d) { seen.insert(d); out.append(d) }
+        }
+        return out
+    }
+
+    func createSession(directory: String, agent: String?) async -> String? {
+        guard let c = try? client(), !directory.isEmpty else { return nil }
+        var body: [String: Any] = ["location": ["directory": directory]]
+        if let agent, !agent.isEmpty { body["agent"] = agent }
+        do {
+            let data = try await c.request("/api/session", method: "POST", json: body)
+            let obj = try JSONSerialization.jsonObject(with: data)
+            let dict = obj as? [String: Any]
+            let id = ((dict?["data"] as? [String: Any])?["id"] as? String) ?? (dict?["id"] as? String)
+            await loadSessions()
+            return id
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
     func replyPermission(_ p: PendingPermission, reply: String) async {
         guard let c = try? client(), let sid = p.sessionID else { return }
         pendingPermissions.removeAll { $0.id == p.id }   // 乐观移除

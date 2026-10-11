@@ -7,6 +7,7 @@ struct SessionListView: View {
     @State private var search = ""
     @State private var collapsed: Set<String> = []
     @State private var expandedGroups: Set<String> = []
+    @State private var showNew = false
 
     private let previewLimit = 5
 
@@ -112,6 +113,9 @@ struct SessionListView: View {
                     Button { Task { await store.refreshAll() } } label: { Image(systemName: "arrow.clockwise") }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button { showNew = true } label: { Image(systemName: "plus") }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 }
             }
@@ -119,6 +123,7 @@ struct SessionListView: View {
                 SessionDetailView(sessionID: id)
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showNew) { NewSessionView { id in path.append(id) } }
             .onChange(of: store.deepLinkSessionID) { _, newValue in
                 if let id = newValue, store.session(id) != nil {
                     path.append(id)

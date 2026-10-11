@@ -2,7 +2,15 @@ import SwiftUI
 import UIKit
 
 private struct TopYKey: PreferenceKey {
-    static var defaultValue: CGFloat = -.greatestFiniteMagnitude
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+private struct ContentHKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+private struct ViewHKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
@@ -35,13 +43,21 @@ struct SessionDetailView: View {
     @State private var messages: [Message] = []
     @State private var olderCursor: String?
     @State private var loadingOlder = false
-    @State private var scrollID: String?
+
+    // 偏移量 + 高度，用于精确判定"是否在底部"（iOS17 可用）
+    @State private var topMinY: CGFloat = 0
+    @State private var contentHeight: CGFloat = 0
+    @State private var viewportHeight: CGFloat = 0
 
     private let pageSize = 25
     private let bottomID = "bottom"
 
-    /// 是否处于底部：由原生 scrollPosition 精确判定（用户上滑即离开底部，不再被拽回）
-    private var atBottom: Bool { scrollID == nil || scrollID == bottomID }
+    private var atBottom: Bool {
+        guard viewportHeight > 0, contentHeight > 0 else { return true }
+        let maxScroll = max(contentHeight - viewportHeight, 0)
+        let scrolled = max(-topMinY, 0)
+        return maxScroll - scrolled <= 150
+    }
 
     private var session: Session? { store.session(sessionID) }
     private var permissions: [PendingPermission] { store.pendingPermissions.filter { $0.sessionID == sessionID } }
@@ -91,15 +107,22 @@ struct SessionDetailView: View {
 
                         Color.clear.frame(height: 1).id(bottomID)
                     }
-                    .scrollTargetLayout()
                     .padding(.horizontal, 14)
                     .padding(.top, 12)
                     .padding(.bottom, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: ContentHKey.self, value: g.size.height)
+                    })
                 }
                 .coordinateSpace(name: "scroll")
                 .scrollDismissesKeyboard(.interactively)
-                .scrollPosition(id: $scrollID, anchor: .bottom)
+                .background(GeometryReader { g in
+                    Color.clear.preference(key: ViewHKey.self, value: g.size.height)
+                })
+                .onPreferenceChange(TopYKey.self) { topMinY = $0 }
+                .onPreferenceChange(ContentHKey.self) { contentHeight = $0 }
+                .onPreferenceChange(ViewHKey.self) { viewportHeight = $0 }
                 .onPreferenceChange(TopYKey.self) { minY in
                     if minY > -60, olderCursor?.isEmpty == false, !loadingOlder {
                         Task { await loadOlder() }
@@ -116,8 +139,7 @@ struct SessionDetailView: View {
                     while !Task.isCancelled {
                         try? await Task.sleep(nanoseconds: 2_000_000_000)
                         if Task.isCancelled { break }
-                        await refreshNewest()
-                        if atBottom { scrollToBottom(proxy) }
+                        await refreshNewest()   // 只刷新，不主动滚动（避免"过一会儿回底"）
                     }
                 }
             }
@@ -160,14 +182,14 @@ struct SessionDetailView: View {
         persist()
     }
 
-    /// 拉取最新一页并**按 id 合并**（同一条消息用最新内容覆盖）。
+    /// 拉取最新一页并**按 id 合并**；内容无变化则不重排（减少抖动）。
     private func refreshNewest() async {
         let page = await store.loadMessages(sessionID: sessionID, limit: pageSize)
         var byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for m in page.items { byId[m.id] = m }
-        messages = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
-        if olderCursor == nil, let prev = page.previous { olderCursor = prev }
-        persist()
+        let merged = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
+        if merged != messages { messages = merged; persist() }
+        if olderCursor == nil, let prev = page.previous { olderCursor = prev; persist() }
     }
 
     private func loadOlder() async {
