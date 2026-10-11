@@ -77,4 +77,25 @@ struct APIClient: Sendable {
     func postJSON(_ path: String, json: [String: Any]? = nil) async throws -> Data {
         try await request(path, method: "POST", json: json)
     }
+
+    /// 上传附件到 Mac（经 /pocketd/upload），返回 opencode 可读取的 file:// uri。
+    func upload(_ data: Data, contentType: String, name: String) async throws -> (uri: String, name: String) {
+        var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)!
+        var p = comps.path
+        if p.hasSuffix("/") { p = String(p.dropLast()) }
+        comps.path = p + "/pocketd/upload"
+        comps.queryItems = [URLQueryItem(name: "name", value: name)]
+        var req = URLRequest(url: comps.url ?? base)
+        req.httpMethod = "POST"
+        req.setValue(authorization, forHTTPHeaderField: "Authorization")
+        req.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        req.httpBody = data
+        let (d, resp) = try await URLSession.shared.data(for: req)
+        guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw APIError.status((resp as? HTTPURLResponse)?.statusCode ?? -1, String(data: d, encoding: .utf8) ?? "")
+        }
+        struct UploadResult: Decodable { var uri: String; var name: String? }
+        let r = try JSONDecoder().decode(UploadResult.self, from: d)
+        return (r.uri, r.name ?? name)
+    }
 }

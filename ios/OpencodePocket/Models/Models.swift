@@ -197,6 +197,15 @@ struct FormOption: Codable, Hashable, Sendable {
     var description: String?
 }
 
+// MARK: - Attachment
+
+struct Attachment: Identifiable, Hashable, Sendable {
+    var id = UUID()
+    var uri: String
+    var name: String
+    var data: Data?
+}
+
 // MARK: - Wrappers
 
 struct Wrapped<T: Decodable>: Decodable {

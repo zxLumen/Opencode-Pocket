@@ -9,18 +9,52 @@ private struct TopYKey: PreferenceKey {
     static var defaultValue: CGFloat = -.greatestFiniteMagnitude
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
+private struct ViewHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
 
 private func dismissKeyboard() {
     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+}
+
+/// 可折叠区块：展开状态由父级持有，避免频繁重渲染导致展开态丢失。
+struct ExpandableSection<Content: View>: View {
+    let title: String
+    let key: String
+    @Binding var expanded: Set<String>
+    @ViewBuilder var content: () -> Content
+
+    private var isOpen: Bool { expanded.contains(key) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                if isOpen { expanded.remove(key) } else { expanded.insert(key) }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: isOpen ? "chevron.down" : "chevron.right").font(.caption2)
+                    Text(title).font(.caption2)
+                }
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if isOpen { content() }
+        }
+    }
 }
 
 struct SessionDetailView: View {
     let sessionID: String
     @Environment(PocketStore.self) private var store
     @State private var messages: [Message] = []
+    @State private var expanded: Set<String> = []
     @State private var olderCursor: String?
     @State private var loadingOlder = false
     @State private var follow = true
+    @State private var viewportHeight: CGFloat = 0
 
     private let pageSize = 25
 
@@ -34,7 +68,7 @@ struct SessionDetailView: View {
     private var visibleMessages: [Message] { messages.filter { $0.type != "synthetic" } }
 
     var body: some View {
-        GeometryReader { outer in
+        VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 14) {
@@ -55,19 +89,17 @@ struct SessionDetailView: View {
                         }
 
                         ForEach(visibleMessages) { message in
-                            MessageRow(message: message).id(message.id)
+                            MessageRow(message: message, expanded: $expanded).id(message.id)
                         }
 
                         if !live.isEmpty { LiveBubble(text: live).id("live") }
 
                         if !liveR.isEmpty {
-                            DisclosureGroup("实时思考") {
+                            ExpandableSection(title: "实时思考", key: "live-r", expanded: $expanded) {
                                 MarkdownText(text: liveR).font(.caption).foregroundStyle(.secondary)
                             }
-                            .font(.caption2)
                         }
 
-                        // 待办（审批 / 提问）放在底部，靠近输入框
                         ForEach(permissions) { PermissionCard(permission: $0) }
                         ForEach(questions) { QuestionCard(question: $0) }
                         ForEach(forms) { FormCard(form: $0) }
@@ -80,18 +112,22 @@ struct SessionDetailView: View {
                             })
                     }
                     .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
+                    .padding(.top, 12)
+                    .padding(.bottom, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .coordinateSpace(name: "scroll")
-                .scrollDismissesKeyboard(.immediately)
+                .scrollDismissesKeyboard(.interactively)
+                .background(GeometryReader { g in
+                    Color.clear.preference(key: ViewHeightKey.self, value: g.size.height)
+                })
                 .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in follow = false })
-                .onTapGesture { dismissKeyboard() }
+                .onPreferenceChange(ViewHeightKey.self) { viewportHeight = $0 }
                 .onPreferenceChange(BottomYKey.self) { minY in
-                    if minY <= outer.size.height + 30 { follow = true }
+                    if minY <= viewportHeight + 30 { follow = true }
                 }
                 .onPreferenceChange(TopYKey.self) { minY in
-                    if minY > -60, olderCursor?.isEmpty == false {
+                    if minY > -60, olderCursor?.isEmpty == false, !loadingOlder {
                         Task { await loadOlder() }
                     }
                 }
@@ -109,6 +145,8 @@ struct SessionDetailView: View {
                     }
                 }
             }
+
+            ComposerView(sessionID: sessionID)   // 固定底栏（内容在其上方，栏下无内容）
         }
         .navigationTitle(session?.displayTitle ?? "会话")
         .navigationBarTitleDisplayMode(.inline)
@@ -124,7 +162,6 @@ struct SessionDetailView: View {
                     .disabled(!isRunning)
             }
         }
-        .safeAreaInset(edge: .bottom) { ComposerView(sessionID: sessionID) }
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
@@ -138,7 +175,6 @@ struct SessionDetailView: View {
         olderCursor = page.previous
     }
 
-    /// 运行中只刷新「最新一页」，保留已加载的更早内容，避免打断/回退。
     private func refreshNewest() async {
         let page = await store.loadMessages(sessionID: sessionID, limit: pageSize)
         let newest = page.items.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
@@ -210,6 +246,7 @@ struct LiveBubble: View {
 
 struct MessageRow: View {
     let message: Message
+    @Binding var expanded: Set<String>
 
     private var bodyText: String { message.displayText }
     private var reasoning: String {
@@ -249,7 +286,7 @@ struct MessageRow: View {
             }
 
             if !tools.isEmpty {
-                DisclosureGroup("🛠 工具调用 (\(tools.count))") {
+                ExpandableSection(title: "🛠 工具调用 (\(tools.count))", key: "tools:\(message.id)", expanded: $expanded) {
                     VStack(alignment: .leading, spacing: 3) {
                         ForEach(Array(tools.enumerated()), id: \.offset) { _, t in
                             HStack(spacing: 6) {
@@ -260,14 +297,12 @@ struct MessageRow: View {
                     }
                     .padding(.top, 2)
                 }
-                .font(.caption2)
             }
 
             if !reasoning.isEmpty {
-                DisclosureGroup("思考") {
+                ExpandableSection(title: "思考", key: "reason:\(message.id)", expanded: $expanded) {
                     MarkdownText(text: reasoning).font(.caption).foregroundStyle(.secondary)
                 }
-                .font(.caption2)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

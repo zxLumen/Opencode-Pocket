@@ -40,6 +40,8 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        NSMicrophoneUsageDescription: 用于语音输入指令（语音转文字）。
+        NSSpeechRecognitionUsageDescription: 用于把语音识别成文字后发送给 opencode。
         CFBundleURLTypes:
           - CFBundleURLName: cn.zxlumen.opencodepocket
             CFBundleURLSchemes:

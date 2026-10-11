@@ -243,13 +243,30 @@ final class PocketStore {
 
     // MARK: - Actions
 
-    func sendPrompt(sessionID: String, text: String) async {
-        guard let c = try? client(), !text.isEmpty else { return }
+    func sendPrompt(sessionID: String, text: String, attachments: [Attachment] = []) async {
+        guard let c = try? client() else { return }
+        guard !text.isEmpty || !attachments.isEmpty else { return }
         do {
-            try await c.postJSON("/api/session/\(sessionID)/prompt", json: ["text": text])
+            var body: [String: Any] = ["text": text]
+            if !attachments.isEmpty {
+                body["files"] = attachments.map { ["uri": $0.uri, "name": $0.name] }
+            }
+            try await c.postJSON("/api/session/\(sessionID)/prompt", json: body)
             refreshTick += 1
         } catch {
             lastError = error.localizedDescription
+        }
+    }
+
+    /// 上传图片到 Mac（经 /pocketd/upload），返回可附带的 Attachment。
+    func uploadImage(_ data: Data, contentType: String, name: String) async -> Attachment? {
+        guard let c = try? client() else { return nil }
+        do {
+            let r = try await c.upload(data, contentType: contentType, name: name)
+            return Attachment(uri: r.uri, name: r.name, data: data)
+        } catch {
+            lastError = error.localizedDescription
+            return nil
         }
     }
 
