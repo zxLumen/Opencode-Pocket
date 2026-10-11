@@ -1,0 +1,27 @@
+# Opencode-Pocket — VPS reverse proxy for opencode server on Mac.
+# TLS is issued automatically by Caddy (Let's Encrypt).
+# Auth is handled by opencode itself (HTTP Basic), so we do NOT add basic_auth here.
+
+pocket.example.com {
+	encode zstd gzip
+
+	reverse_proxy 127.0.0.1:4096 {
+		# Required for Server-Sent Events (/api/event) — disable buffering.
+		flush_interval -1
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/pocket-access.log
+		format json
+	}
+
+	# Optional hardening: allow only your networks (uncomment and adjust).
+	# @blocked not remote_ip 100.64.0.0/10 <your.home.ip>/32
+	# respond @blocked 403
+}

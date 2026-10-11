@@ -1,0 +1,31 @@
+# macOS
+.DS_Store
+
+# Node (pocketd)
+node_modules/
+dist/
+npm-debug.log*
+*.log
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+secrets/
+*.env
+!*.env.example
+
+# Apple / Xcode
+ios/*.xcodeproj
+ios/*.xcworkspace
+ios/DerivedData/
+ios/build/
+ios/.build/
+*.xcuserstate
+xcuserdata/
+*.p8
+*.p12
+*.mobileprovision
+
+# Generated
+*.generated.swift
