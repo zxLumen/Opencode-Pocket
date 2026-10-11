@@ -106,7 +106,6 @@ struct SessionDetailView: View {
                     .padding(.bottom, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .defaultScrollAnchor(.bottom)
                 .coordinateSpace(name: "scroll")
                 .scrollDismissesKeyboard(.interactively)
                 .background(GeometryReader { g in
@@ -115,7 +114,8 @@ struct SessionDetailView: View {
                 .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in follow = false })
                 .onPreferenceChange(ViewHeightKey.self) { viewportHeight = $0 }
                 .onPreferenceChange(BottomYKey.self) { minY in
-                    if minY <= viewportHeight + 30 { follow = true }
+                    // 仅在"回到接近底部"时恢复跟随；停止跟随只由用户拖动触发（内容增长不误判）
+                    if minY <= viewportHeight + 120 { follow = true }
                 }
                 .onPreferenceChange(TopYKey.self) { minY in
                     if minY > -60, olderCursor?.isEmpty == false, !loadingOlder {
@@ -130,10 +130,10 @@ struct SessionDetailView: View {
                     store.markViewed(sessionID)
                     if messages.isEmpty {
                         await reload()
-                        scrollToBottom(proxy, animated: false)
                     } else {
                         await refreshNewest()
                     }
+                    scrollToBottom(proxy, animated: false)   // 初次定位到底部
                     // 打开期间始终高频刷新（不依赖"运行中"判定）
                     while !Task.isCancelled {
                         try? await Task.sleep(nanoseconds: 2_000_000_000)
