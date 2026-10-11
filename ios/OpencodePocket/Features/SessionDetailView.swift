@@ -1,16 +1,8 @@
 import SwiftUI
 import UIKit
 
-private struct BottomYKey: PreferenceKey {
-    static var defaultValue: CGFloat = .greatestFiniteMagnitude
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = min(value, nextValue()) }
-}
 private struct TopYKey: PreferenceKey {
     static var defaultValue: CGFloat = -.greatestFiniteMagnitude
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
-}
-private struct ViewHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
@@ -43,10 +35,13 @@ struct SessionDetailView: View {
     @State private var messages: [Message] = []
     @State private var olderCursor: String?
     @State private var loadingOlder = false
-    @State private var follow = true
-    @State private var viewportHeight: CGFloat = 0
+    @State private var scrollID: String?
 
     private let pageSize = 25
+    private let bottomID = "bottom"
+
+    /// 是否处于底部：由原生 scrollPosition 精确判定（用户上滑即离开底部，不再被拽回）
+    private var atBottom: Bool { scrollID == nil || scrollID == bottomID }
 
     private var session: Session? { store.session(sessionID) }
     private var permissions: [PendingPermission] { store.pendingPermissions.filter { $0.sessionID == sessionID } }
@@ -94,13 +89,9 @@ struct SessionDetailView: View {
                         ForEach(questions) { QuestionCard(question: $0) }
                         ForEach(forms) { FormCard(form: $0) }
 
-                        Color.clear
-                            .frame(height: 1)
-                            .id("bottom")
-                            .background(GeometryReader { g in
-                                Color.clear.preference(key: BottomYKey.self, value: g.frame(in: .named("scroll")).minY)
-                            })
+                        Color.clear.frame(height: 1).id(bottomID)
                     }
+                    .scrollTargetLayout()
                     .padding(.horizontal, 14)
                     .padding(.top, 12)
                     .padding(.bottom, 8)
@@ -108,38 +99,25 @@ struct SessionDetailView: View {
                 }
                 .coordinateSpace(name: "scroll")
                 .scrollDismissesKeyboard(.interactively)
-                .background(GeometryReader { g in
-                    Color.clear.preference(key: ViewHeightKey.self, value: g.size.height)
-                })
-                .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in follow = false })
-                .onPreferenceChange(ViewHeightKey.self) { viewportHeight = $0 }
-                .onPreferenceChange(BottomYKey.self) { minY in
-                    // 仅在"回到接近底部"时恢复跟随；停止跟随只由用户拖动触发（内容增长不误判）
-                    if minY <= viewportHeight + 120 { follow = true }
-                }
+                .scrollPosition(id: $scrollID, anchor: .bottom)
                 .onPreferenceChange(TopYKey.self) { minY in
                     if minY > -60, olderCursor?.isEmpty == false, !loadingOlder {
                         Task { await loadOlder() }
                     }
                 }
-                .onChange(of: messages.count) { _, _ in if follow { scrollToBottom(proxy) } }
-                .onChange(of: live) { _, _ in if follow { scrollToBottom(proxy) } }
-                .onChange(of: store.refreshTick) { _, _ in Task { await refreshNewest(); if follow { scrollToBottom(proxy) } } }
+                .onChange(of: messages.count) { _, _ in if atBottom { scrollToBottom(proxy) } }
+                .onChange(of: live) { _, _ in if atBottom { scrollToBottom(proxy) } }
+                .onChange(of: store.refreshTick) { _, _ in Task { await refreshNewest(); if atBottom { scrollToBottom(proxy) } } }
                 .task {
                     seedFromCache()
                     store.markViewed(sessionID)
-                    if messages.isEmpty {
-                        await reload()
-                    } else {
-                        await refreshNewest()
-                    }
+                    if messages.isEmpty { await reload() } else { await refreshNewest() }
                     scrollToBottom(proxy, animated: false)   // 初次定位到底部
-                    // 打开期间始终高频刷新（不依赖"运行中"判定）
                     while !Task.isCancelled {
                         try? await Task.sleep(nanoseconds: 2_000_000_000)
                         if Task.isCancelled { break }
                         await refreshNewest()
-                        if follow { scrollToBottom(proxy) }
+                        if atBottom { scrollToBottom(proxy) }
                     }
                 }
             }
@@ -159,8 +137,8 @@ struct SessionDetailView: View {
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
-        if animated { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) } }
-        else { proxy.scrollTo("bottom", anchor: .bottom) }
+        if animated { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) } }
+        else { proxy.scrollTo(bottomID, anchor: .bottom) }
     }
 
     private func seedFromCache() {
@@ -182,7 +160,7 @@ struct SessionDetailView: View {
         persist()
     }
 
-    /// 拉取最新一页并**按 id 合并**（同一条消息用最新内容覆盖，修复"只看到第一段思考/看不到答案"）。
+    /// 拉取最新一页并**按 id 合并**（同一条消息用最新内容覆盖）。
     private func refreshNewest() async {
         let page = await store.loadMessages(sessionID: sessionID, limit: pageSize)
         var byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -284,11 +262,8 @@ struct MessageRow: View {
             }
 
             if message.isUser {
-                if let t = message.text, !t.isEmpty {
-                    MarkdownText(text: t).textSelection(.enabled)
-                }
+                if let t = message.text, !t.isEmpty { MarkdownText(text: t).textSelection(.enabled) }
             } else {
-                // 按 content 原始顺序渲染：思考出现在答案之前（与电脑端一致）
                 ForEach(Array((message.content ?? []).enumerated()), id: \.offset) { _, part in
                     partView(part)
                 }
@@ -307,9 +282,7 @@ struct MessageRow: View {
                 }
             }
         case "text":
-            if let t = part.text, !t.isEmpty {
-                MarkdownText(text: t).textSelection(.enabled)
-            }
+            if let t = part.text, !t.isEmpty { MarkdownText(text: t).textSelection(.enabled) }
         case "tool":
             if let name = part.name, !name.isEmpty {
                 HStack(spacing: 6) {

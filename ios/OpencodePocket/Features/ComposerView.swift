@@ -9,7 +9,7 @@ struct ComposerView: View {
     @State private var attachments: [Attachment] = []
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var speech = SpeechRecognizer()
-    @State private var speechBase = ""
+    @State private var lastTranscript = ""
     @State private var uploading = false
 
     private var canSend: Bool {
@@ -84,8 +84,11 @@ struct ComposerView: View {
         .onChange(of: photoItems) { _, items in Task { await handlePhotos(items) } }
         .onChange(of: speech.transcript) { _, t in
             guard speech.isRecording else { return }
-            // 追加到已有内容之后（不覆盖），并随识别结果实时增长
-            text = speechBase.isEmpty ? t : speechBase + t
+            // 只追加增量：保留手动输入的换行/编辑，新说的话往后加
+            if t.hasPrefix(lastTranscript) {
+                text += String(t.dropFirst(lastTranscript.count))
+            }
+            lastTranscript = t
         }
         .onDisappear { speech.stop() }
     }
@@ -94,7 +97,7 @@ struct ComposerView: View {
         if speech.isRecording {
             speech.stop()
         } else {
-            speechBase = text   // 记住当前输入框内容作为前缀
+            lastTranscript = ""
             speech.toggle()
         }
     }
