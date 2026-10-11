@@ -1,6 +1,10 @@
 name: sandbox
 
-# 构建并推送访客沙盒镜像(ghcr.io/<owner>/opencode-play:<sha> + :latest)。
+# 构建并推送访客沙盒镜像(ghcr.io/<owner>/opencode-pocket-sandbox:<sha> + :latest)。
+#
+# 包名必须由本仓库首次推送(与其他子应用仓库同一模式):GHCR 的容器包只默认授权
+# 「首次发布它的那个仓库」的 Actions 写入;沿用博客仓库创建的老包名 opencode-play
+# 会被拒(permission_denied)。故本仓库用自己的包名,凭 GITHUB_TOKEN 即可推。
 # 只改了 infra/vps/sandbox/ 才触发,所以本仓库的 iOS/pocketd 改动不会重建沙盒镜像。
 #
 # 部署不在本 workflow 里做:服务器用 cron 轮询本仓库 main 的 SHA,
@@ -39,9 +43,9 @@ jobs:
       - name: Compute image name (lowercase)
         id: img
         run: |
-          echo "play=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/opencode-play" >> "$GITHUB_OUTPUT"
+          echo "sandbox=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/opencode-pocket-sandbox" >> "$GITHUB_OUTPUT"
 
-      - name: Build & push opencode-play image
+      - name: Build & push sandbox image
         uses: docker/build-push-action@v6
         with:
           context: infra/vps/sandbox
@@ -51,5 +55,5 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           tags: |
-            ${{ steps.img.outputs.play }}:${{ github.sha }}
-            ${{ steps.img.outputs.play }}:latest
+            ${{ steps.img.outputs.sandbox }}:${{ github.sha }}
+            ${{ steps.img.outputs.sandbox }}:latest

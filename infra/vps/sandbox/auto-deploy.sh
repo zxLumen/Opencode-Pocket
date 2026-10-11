@@ -13,7 +13,7 @@ cd "$(dirname "$0")" || exit 1
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 REPO_URL="${REPO_URL:-https://github.com/zxLumen/Opencode-Pocket.git}"
-IMAGE_BASE="${IMAGE_BASE:-ghcr.io/zxlumen/opencode-play}"
+IMAGE_BASE="${IMAGE_BASE:-ghcr.io/zxlumen/opencode-pocket-sandbox}"
 BRANCH="${BRANCH:-main}"
 STATE="./.last-deployed"
 LOCK="./.auto-deploy.lock"

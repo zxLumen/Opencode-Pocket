@@ -27,13 +27,15 @@ if [ "${IMAGE_TAG}" != "latest" ]; then
   git -C "${TMP}" remote add origin "${REPO_URL}"
   git -C "${TMP}" fetch -q --depth 1 origin "${REF}"
   git -C "${TMP}" checkout -q FETCH_HEAD -- \
-    "${SUBDIR}/Caddyfile" "${SUBDIR}/docker-compose.yml" "${SUBDIR}/deploy.sh" "${SUBDIR}/ci-run.sh"
+    "${SUBDIR}/Caddyfile" "${SUBDIR}/docker-compose.yml" "${SUBDIR}/deploy.sh" "${SUBDIR}/ci-run.sh" "${SUBDIR}/auto-deploy.sh"
   cp "${TMP}/${SUBDIR}/Caddyfile"          ./Caddyfile
   cp "${TMP}/${SUBDIR}/docker-compose.yml" ./docker-compose.yml
   cp "${TMP}/${SUBDIR}/deploy.sh"          ./deploy.sh && chmod +x ./deploy.sh
-  # 本脚本自身:先落到临时名再 mv 原子替换(避免边跑边被改坏)
+  # 本脚本自身 + auto-deploy.sh:先落临时名再 mv 原子替换(避免边跑边被改坏)
   cp "${TMP}/${SUBDIR}/ci-run.sh" ./ci-run.sh.new && chmod +x ./ci-run.sh.new
   mv -f ./ci-run.sh.new ./ci-run.sh
+  cp "${TMP}/${SUBDIR}/auto-deploy.sh" ./auto-deploy.sh.new && chmod +x ./auto-deploy.sh.new
+  mv -f ./auto-deploy.sh.new ./auto-deploy.sh
   echo "==> 配置已更新"
 fi
 

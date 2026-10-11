@@ -28,7 +28,7 @@ infra/vps/sandbox/
 ├── ci-run.sh           # 部署入口：先同步服务器侧配置，再交给 deploy.sh
 ├── auto-deploy.sh      # cron 轮询部署（见下）
 └── .env.example        # 服务器 .env 模板（不入库）
-.github/workflows/sandbox.yml   # CI：构建推送 ghcr.io/<owner>/opencode-play:<sha>/latest
+.github/workflows/sandbox.yml   # CI：构建推送 ghcr.io/<owner>/opencode-pocket-sandbox:<sha>/latest
 ```
 
 ## 架构
@@ -55,7 +55,7 @@ docker_play 内网 ──► opencode-play 容器（opencode web :4096）
 
 | 组件 | 说明 |
 | --- | --- |
-| 镜像 | `ghcr.io/<owner>/opencode-play:<sha>/latest`，基于官方 `ghcr.io/anomalyco/opencode`，由**本仓库** CI 构建；服务器只 pull。 |
+| 镜像 | `ghcr.io/<owner>/opencode-pocket-sandbox:<sha>/latest`，基于官方 `ghcr.io/anomalyco/opencode`，由**本仓库** CI 构建；服务器只 pull。 |
 | 边缘 Caddy | 承载全部访客锁定逻辑（见 `infra/vps/sandbox/Caddyfile`）；不发布端口，由博客栈的 Caddy 转发进来。 |
 | 配置 | `opencode.json` 烤进镜像只读区，每次启动由 `entrypoint.sh` 覆盖回家目录；访客改配置只影响当次进程，重启即还原。 |
 | 网络 | `docker_play`（external，博客栈创建）：只挂 `app`（AI 网关）+ 博客 `caddy`（反代）+ 本栈服务；不接 `web`。 |
@@ -108,7 +108,7 @@ opencode 同意后才执行，理论上拦不住绕过。真正的边界是**容
 ## 构建与部署
 
 **构建（CI）**：`.github/workflows/sandbox.yml` 只在本仓库 push `main` 且改动落在
-`infra/vps/sandbox/**` 时触发，推送 `ghcr.io/<owner>/opencode-play:<sha>` 与 `:latest`；
+`infra/vps/sandbox/**` 时触发，推送 `ghcr.io/<owner>/opencode-pocket-sandbox:<sha>` 与 `:latest`；
 镜像公开，服务器匿名 pull，无需在服务器存凭据。
 
 **部署（服务器 cron 轮询）**：GitHub runner 连云安全组的 22 端口常被丢弃，CI 直接 SSH

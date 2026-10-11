@@ -9,21 +9,21 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 IMAGE_TAG="${1:-${IMAGE_TAG:-latest}}"
-export OPENCODE_PLAY_TAG="${IMAGE_TAG}"
+export OPENCODE_SANDBOX_TAG="${IMAGE_TAG}"
 
 [[ "${EUID}" -eq 0 ]] || SUDO="sudo -n"
 echo "[sandbox-deploy] tag=${IMAGE_TAG} (工作目录: $(pwd))"
 
 # sudo 默认 env_reset 会清掉变量,用 env 显式传回 compose
-${SUDO:-} env OPENCODE_PLAY_TAG="${OPENCODE_PLAY_TAG}" docker compose pull opencode-play
+${SUDO:-} env OPENCODE_SANDBOX_TAG="${OPENCODE_SANDBOX_TAG}" docker compose pull opencode-play
 
 # Caddyfile 是 bind mount:内容变了不会重启容器 → 先尝试无损 reload(失败才重建容器)。
 if ${SUDO:-} docker compose ps --status running --services 2>/dev/null | grep -q '^sandbox-caddy$'; then
   ${SUDO:-} docker compose exec -T sandbox-caddy caddy reload --config /etc/caddy/Caddyfile \
-    || ${SUDO:-} env OPENCODE_PLAY_TAG="${OPENCODE_PLAY_TAG}" docker compose up -d --force-recreate sandbox-caddy
+    || ${SUDO:-} env OPENCODE_SANDBOX_TAG="${OPENCODE_SANDBOX_TAG}" docker compose up -d --force-recreate sandbox-caddy
 fi
 
-${SUDO:-} env OPENCODE_PLAY_TAG="${OPENCODE_PLAY_TAG}" docker compose up -d
+${SUDO:-} env OPENCODE_SANDBOX_TAG="${OPENCODE_SANDBOX_TAG}" docker compose up -d
 
 # 回收 12 小时前的旧镜像(在用的不受影响)
 ${SUDO:-} docker image prune -af --filter until=12h
