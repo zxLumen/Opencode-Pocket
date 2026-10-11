@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# Install Opencode-Pocket Mac services (serve, tunnel, pocketd) as launchd agents.
+# Install Opencode-Pocket Mac services.
+#
+# Model: the *shared* opencode background service is pinned to 127.0.0.1:4096,
+# so plain `opencode` (your normal habit) already lands there. We only add:
+#   - a login job that ensures the service is up
+#   - the reverse tunnel to the VPS
+#   - pocketd (event -> notification)
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -17,24 +23,27 @@ mkdir -p "$CONF_DIR" "$STATE_DIR" "$LA_DIR"
 chmod 700 "$CONF_DIR" "$STATE_DIR"
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  PW="$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')"
   cat > "$ENV_FILE" <<EOF
 # Opencode-Pocket — Mac environment (keep private)
-OPENCODE_SERVER_USERNAME=opencode
-OPENCODE_SERVER_PASSWORD=$PW
-OPENCODE_POCKET_PORT=4096
+# The opencode password is read from ~/.config/opencode/service.json by pocketd;
+# the iOS app needs it too — print it with:
+#   python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.config/opencode/service.json')))['password'])"
 
 POCKET_REPO=$REPO
 NODE_BIN=$NODE_BIN
 OC_BIN=$OC_BIN
 
+# The shared service is pinned to this address (see docs/mac-setup.md).
+OPENCODE_URL=http://127.0.0.1:4096
+OPENCODE_SERVER_USERNAME=opencode
+
 # Reverse tunnel to VPS (Mac -> VPS, outbound)
 VPS_HOST=your-vps-host
 VPS_USER=ubuntu
 VPS_SSH_PORT=22
+TUNNEL_PORT=4096
 
 # pocketd
-OPENCODE_URL=http://127.0.0.1:4096
 POCKETD_PORT=8788
 NTFY_URL=https://ntfy.sh
 NTFY_TOPIC=opencode-pocket-CHANGE-ME
@@ -42,9 +51,19 @@ NTFY_TOKEN=
 POCKET_URL_SCHEME=opencodepocket
 EOF
   chmod 600 "$ENV_FILE"
-  echo "Created $ENV_FILE (edit NTFY_TOPIC etc.)"
+  echo "Created $ENV_FILE"
 else
   echo "Keeping existing $ENV_FILE"
+fi
+
+# Verify the shared service is pinned to 4096, warn otherwise.
+CUR_PORT="$("$OC_BIN" service get port 2>/dev/null | tr -d '[:space:]')"
+if [[ "$CUR_PORT" != "4096" ]]; then
+  echo
+  echo "WARNING: shared service port is '${CUR_PORT:-<unset>}', expected 4096."
+  echo "Pin it (this restarts the background service) with:"
+  echo "  opencode service set hostname 127.0.0.1 && opencode service set port 4096"
+  echo
 fi
 
 render() {
@@ -52,7 +71,6 @@ render() {
   sed -e "s#__REPO__#$REPO#g" -e "s#__HOME__#$HOME#g" "$src" > "$dst"
   chmod 644 "$dst"
 }
-
 chmod +x "$REPO/infra/mac/"*.sh
 
 for name in serve tunnel pocketd; do
@@ -68,4 +86,5 @@ done
 
 echo
 echo "Logs: $STATE_DIR"
-echo "Verify: curl -u opencode:\$OPENCODE_SERVER_PASSWORD http://127.0.0.1:4096/api/info"
+echo "App password: python3 -c \"import json,os;print(json.load(open(os.path.expanduser('~/.config/opencode/service.json')))['password'])\""
+echo "Verify local: curl -u opencode:\$(cat /dev/null) http://127.0.0.1:4096/api/info"

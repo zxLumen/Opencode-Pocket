@@ -1,9 +1,35 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 const env = process.env;
 
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+function stateService() {
+  return readJson(path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state'), 'opencode', 'service.json'));
+}
+function configService() {
+  return readJson(path.join(os.homedir(), '.config', 'opencode', 'service.json'));
+}
+
+const state = stateService() || {};
+const cfgService = configService() || {};
+
+// Prefer explicit env, then the running shared service's URL/password.
+const opencodeUrl = (env.OPENCODE_URL || state.url || 'http://127.0.0.1:4096').replace(/\/+$/, '');
+const password = env.OPENCODE_SERVER_PASSWORD || state.password || cfgService.password || '';
+
 export const config = {
-  opencodeUrl: (env.OPENCODE_URL || 'http://127.0.0.1:4096').replace(/\/+$/, ''),
+  opencodeUrl,
   username: env.OPENCODE_SERVER_USERNAME || 'opencode',
-  password: env.OPENCODE_SERVER_PASSWORD || '',
+  password,
   port: Number(env.POCKETD_PORT || 8788),
   appScheme: env.POCKET_URL_SCHEME || 'opencodepocket',
   notifyIdle: String(env.NOTIFY_IDLE || '').toLowerCase() === 'true',
@@ -16,7 +42,7 @@ export const config = {
 
 export function assertConfig() {
   if (!config.password) {
-    console.error('[pocketd] OPENCODE_SERVER_PASSWORD is not set — requests will be rejected (401).');
+    console.error('[pocketd] No opencode password found (env or ~/.config/opencode/service.json).');
   }
   if (!config.ntfy.topic) {
     console.error('[pocketd] NTFY_TOPIC is not set — ntfy channel disabled.');

@@ -2,69 +2,74 @@
 
 ## 前置
 
-- opencode v2（`opencode --version` 应输出 `2.0.x`）
-- Node 20+（用于 pocketd）
-- 已配置到 VPS 的 SSH 免密登录（`ssh ubuntu@your-vps-host` 可直接登录）
+- opencode v2（`opencode --version` → `2.0.x`）
+- Node 20+（pocketd）
+- 已配置到 VPS 的 SSH 免密登录（`ssh ubuntu@your-vps-host`）
 
-## 1. 生成配置
+## 0. 原理（重要）
+
+opencode v2 默认会为当前用户跑**一个共享后台服务**，所有 `opencode` 客户端自动接入。
+本项目把这个共享服务**固定到 `127.0.0.1:4096`**，所以你**直接敲 `opencode` 照常工作**，而且所有 session 都在固定地址上，便于隧道与 App 访问。
+
+固定端口（只需做一次）：
+
+```bash
+opencode service set hostname 127.0.0.1
+opencode service set port 4096
+```
+
+> 注意：每次 `service set` 都会**重启后台服务**（会短暂断开正在运行的 TUI，重连即可）。
+> 配置持久化在 `~/.config/opencode/service.json`，重启后仍生效。
+> 确认：`opencode service status` 应输出 `http://127.0.0.1:4096`。
+
+查看 App 要用的密码：
+
+```bash
+python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.config/opencode/service.json')))['password'])"
+```
+
+## 1. 安装后台服务
 
 ```bash
 cd ~/Projects/Opencode-Pocket
 ./infra/mac/install-mac.sh
 ```
 
-脚本会：
+会创建 `~/.config/opencode-pocket/env` 并把三个 launchd 服务渲染到 `~/Library/LaunchAgents/`：
 
-1. 创建 `~/.config/opencode-pocket/env`（含随机强密码、ntfy 配置、VPS 地址），若已存在则保留。
-2. 创建 `~/.local/state/opencode-pocket/` 日志目录。
-3. 把 launchd plist 从仓库模板渲染到 `~/Library/LaunchAgents/`。
-4. 加载 `serve` / `tunnel` / `pocketd` 三个服务。
+| Label | 作用 |
+|---|---|
+| `ai.opencode.pocket.serve` | 登录时确保共享服务已启动 |
+| `ai.opencode.pocket.tunnel` | `ssh -R` 反向隧道到 VPS |
+| `ai.opencode.pocket.pocketd` | 订阅事件 → 通知 |
 
-编辑 `~/.config/opencode-pocket/env` 填入 `VPS_HOST` / `VPS_USER` / ntfy 配置。
+编辑 `~/.config/opencode-pocket/env` 填入 `VPS_HOST` / `VPS_USER` / `NTFY_TOPIC`。
 
-## 2. 手动启动/停止
+## 2. 手动控制
 
 ```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.opencode.pocket.serve.plist
-launchctl bootout   gui/$(id -u)/ai.opencode.pocket.serve
-# 查看
 launchctl list | grep opencode.pocket
+launchctl kickstart -k gui/$(id -u)/ai.opencode.pocket.tunnel
+launchctl bootout   gui/$(id -u)/ai.opencode.pocket.pocketd
 ```
 
-## 3. 让 VSCode 的 TUI 接入固定 server
-
-不要再用旧扩展的 `opencode --port <随机>`。改为在工程里跑：
+## 3. 验证
 
 ```bash
-opencode --server http://127.0.0.1:4096
+PW=$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.config/opencode/service.json')))['password'])")
+
+# 本机
+curl -u opencode:$PW http://127.0.0.1:4096/api/info
+
+# 经隧道 + Caddy（公网，需已完成 VPS 侧部署与 DNS）
+curl -u opencode:$PW https://pocket.example.com/api/info
+
+# 正在运行的 session
+curl -u opencode:$PW http://127.0.0.1:4096/api/session/active
 ```
 
-或在 VSCode 里用一个 Task / 终端命令。也可安装 `oc` 包装脚本：
+## 4. 关于 VSCode 扩展
 
-```bash
-source ~/Projects/Opencode-Pocket/infra/mac/oc.sh   # 提供 oc 命令
-oc            # 等价于 opencode --server http://127.0.0.1:4096
-```
-
-## 4. 验证
-
-```bash
-# 本机直连
-curl -u opencode:$OPENCODE_SERVER_PASSWORD http://127.0.0.1:4096/api/info
-
-# 经隧道 + Caddy（公网）
-curl -u opencode:$OPENCODE_SERVER_PASSWORD https://pocket.example.com/api/info
-
-# 活动 session
-curl -u opencode:$OPENCODE_SERVER_PASSWORD http://127.0.0.1:4096/api/session/active
-```
-
-## 5. 清理旧的随机端口 server（可选）
-
-```bash
-# 找到并结束遗留进程
-lsof -nP -iTCP -sTCP:LISTEN | grep opencode
-# kill <pid>
-```
-
-> 注意：不要启用 `opencode service disabled`（会让 plain `opencode` 各自起私有 server）。
+旧的 `sst-dev.opencode` 扩展执行 `opencode --port <随机>`（v1 语法，v2 顶层无此参数），会干扰聚合。
+推荐：**在 VSCode 终端里直接 `opencode`**（走共享服务）；或 source `infra/mac/oc.sh` 之后用 `oc`。
+不使用旧扩展的“打开终端”按钮即可。

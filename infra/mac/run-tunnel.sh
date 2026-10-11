@@ -6,7 +6,7 @@ if [[ -f "$ENV_FILE" ]]; then
   set -a; # shellcheck disable=SC1090
   . "$ENV_FILE"; set +a
 fi
-PORT="${OPENCODE_POCKET_PORT:-4096}"
+PORT="${TUNNEL_PORT:-${OPENCODE_POCKET_PORT:-4096}}"
 : "${VPS_HOST:?VPS_HOST must be set}"
 : "${VPS_USER:?VPS_USER must be set}"
 SSH_PORT="${VPS_SSH_PORT:-22}"
