@@ -25,8 +25,7 @@ function describeForm(form = {}) {
 
 /**
  * 依据本版本(2.0.26)真实事件类型决定是否通知。
- * 事件：permission.asked / form.created / question.* / session.execution.failed /
- *       session.step.failed / session.error / session.idle
+ * 每条通知带 kind，供通道(飞书卡片)决定配色/emoji。
  */
 export function evaluate(event) {
   const type = event?.type || '';
@@ -39,32 +38,32 @@ export function evaluate(event) {
     const rid = data.id || data.requestID || data.permissionID || data.permission?.id || event.id || sessionID;
     return {
       key: `permission:${rid}`,
-      notification: { ...base, title: '需要审批', body: describePermission(data), priority: 'high', tags: ['lock', 'warning'] },
+      notification: { ...base, kind: 'permission', title: '需要审批', body: describePermission(data), priority: 'high', tags: ['lock', 'warning'] },
     };
   }
 
-  // 提问 / 表单（本版本 question 实现为 form.created）
+  // 提问 / 表单
   if ((/form/i.test(type) && /created|ask/i.test(type)) || (/question/i.test(type) && /ask|request/i.test(type))) {
     const form = data.form || data;
     const rid = form?.id || data.formID || data.id || data.requestID || event.id || sessionID;
     return {
       key: `form:${rid}`,
-      notification: { ...base, title: '需要回答', body: describeForm(form), priority: 'high', tags: ['question'] },
+      notification: { ...base, kind: 'question', title: '需要回答', body: describeForm(form), priority: 'high', tags: ['question'] },
     };
   }
 
-  // 出错 / 打断
+  // 出错
   if (type.includes('execution.failed') || type.includes('step.failed') || type === 'session.error') {
     const msg = firstString(data.error?.message, data.message, data.error?.name);
     return {
       key: `error:${sessionID}:${event.id || Date.now()}`,
-      notification: { ...base, title: '会话出错', body: msg || 'session error', priority: 'urgent', tags: ['rotating_light'] },
+      notification: { ...base, kind: 'error', title: '会话出错', body: msg || 'session error', priority: 'urgent', tags: ['rotating_light'] },
     };
   }
   if (type.includes('execution.interrupted')) {
     return {
       key: `interrupted:${sessionID}:${event.id || Date.now()}`,
-      notification: { ...base, title: '会话已打断', body: '执行被中断', priority: 'default', tags: ['stop_sign'] },
+      notification: { ...base, kind: 'running', title: '会话已打断', body: '执行被中断', priority: 'default', tags: ['stop_sign'] },
     };
   }
 
@@ -72,7 +71,7 @@ export function evaluate(event) {
   if (config.notifyStatus && type === 'session.execution.started') {
     return {
       key: `start:${sessionID}:${event.id || Date.now()}`,
-      notification: { ...base, title: '会话开始运行', body: '开始执行任务', priority: 'low', tags: ['arrow_forward'] },
+      notification: { ...base, kind: 'running', title: '开始运行', body: '开始执行任务', priority: 'low', tags: ['arrow_forward'] },
     };
   }
 
@@ -80,7 +79,7 @@ export function evaluate(event) {
   if (config.notifyIdle && (type === 'session.idle' || type === 'session.execution.succeeded')) {
     return {
       key: `done:${sessionID}:${data.idle ?? event.id ?? Date.now()}`,
-      notification: { ...base, title: '会话完成', body: '已空闲，等待你的下一步', priority: 'default', tags: ['white_check_mark'] },
+      notification: { ...base, kind: 'done', title: '会话完成', body: '已空闲，等待你的下一步', priority: 'default', tags: ['white_check_mark'] },
     };
   }
 

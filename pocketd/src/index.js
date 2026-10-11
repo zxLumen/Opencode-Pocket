@@ -76,12 +76,11 @@ async function main() {
     seen.set(key, now);
 
     const n = { ...result.notification };
-    // 优先取单会话最新数据（标题可能刚生成，缓存可能还是旧的）
+    // 取单会话最新数据（标题可能刚生成，缓存可能滞后）
     const info = (await cache.fetchOne(n.sessionID)) || (await cache.get(n.sessionID));
     if (info) {
       n.sessionTitle = info.title;
-      const dir = info.directory ? ` (${info.directory})` : '';
-      n.body = `${info.title}${dir}\n${n.body}`;
+      n.directory = info.directory;
     }
     if (n.sessionID) n.click = `${config.appScheme}://session/${n.sessionID}`;
 

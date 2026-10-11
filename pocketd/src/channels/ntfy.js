@@ -12,7 +12,7 @@ export function ntfyChannel(cfg) {
       const body = {
         topic: cfg.ntfy.topic,
         title: n.title,
-        message: n.body,
+        message: n.sessionTitle ? `${n.sessionTitle}\n${n.body}` : n.body,
         priority: PRIORITY[n.priority] ?? 3,
         tags: n.tags,
       };
