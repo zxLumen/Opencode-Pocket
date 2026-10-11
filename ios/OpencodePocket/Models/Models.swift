@@ -55,9 +55,11 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     var id: String
     var type: String?
     var agent: String?
+    var previous: String?
     var model: ModelRef?
     var time: TimeInfo?
     var content: [Part]?
+    var text: String?          // 用户/合成消息使用顶层 text
 
     struct TimeInfo: Codable, Hashable, Sendable {
         var created: Double?
@@ -67,14 +69,30 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
 
     var isUser: Bool { type == "user" }
     var isAssistant: Bool { type == "assistant" }
-    var text: String {
+
+    var contentText: String {
         (content ?? []).compactMap { $0.text }.joined(separator: "\n")
+    }
+    /// 顶层 text 优先，否则用 content 里的 text 片段。
+    var displayText: String {
+        if let t = text, !t.isEmpty { return t }
+        return contentText
+    }
+    var tools: [(name: String, status: String?)] {
+        (content ?? []).compactMap { part in
+            guard part.type == "tool", let name = part.name, !name.isEmpty else { return nil }
+            return (name, part.state?.status)
+        }
     }
 }
 
 struct Part: Codable, Hashable, Sendable {
     var type: String?
     var text: String?
+    var name: String?
+    var state: PartState?
+
+    struct PartState: Codable, Hashable, Sendable { var status: String? }
 }
 
 // MARK: - Agent
@@ -148,6 +166,34 @@ struct OpenCodeEvent: Decodable, Sendable {
             action = try? data.decodeIfPresent(String.self, forKey: .action)
         }
     }
+}
+
+// MARK: - Forms (也就是 question)
+
+struct FormInfo: Codable, Identifiable, Hashable, Sendable {
+    var id: String
+    var sessionID: String
+    var title: String
+    var fields: [FormField]
+}
+
+struct FormField: Codable, Hashable, Sendable {
+    var key: String
+    var type: String                 // string | number | integer | boolean | multiselect | external
+    var title: String?
+    var description: String?
+    var required: Bool?
+    var hidden: Bool?
+    var options: [FormOption]?
+    var url: String?
+
+    var displayTitle: String { title ?? key }
+}
+
+struct FormOption: Codable, Hashable, Sendable {
+    var value: String
+    var label: String
+    var description: String?
 }
 
 // MARK: - Wrappers

@@ -47,6 +47,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("设置")
+            .scrollDismissesKeyboard(.immediately)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成") { dismiss() }

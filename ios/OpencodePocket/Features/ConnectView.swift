@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct ConnectView: View {
     @Environment(PocketStore.self) private var store
@@ -42,6 +43,15 @@ struct ConnectView: View {
                 }
             }
             .navigationTitle("Opencode-Pocket")
+            .scrollDismissesKeyboard(.immediately)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("收起") {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                }
+            }
         }
     }
 }

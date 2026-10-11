@@ -36,6 +36,7 @@ final class PocketStore {
     var agents: [Agent] = []
     var pendingPermissions: [PendingPermission] = []
     var pendingQuestions: [PendingQuestion] = []
+    var pendingForms: [FormInfo] = []
     var liveText: [String: String] = [:]
     var liveReasoning: [String: String] = [:]
     var lastError: String?
@@ -134,8 +135,10 @@ final class PocketStore {
                 )
             }
         }
-        // 说明：当前 opencode 版本(2.0.26)的 HTTP API 未暴露 question 接口，
-        // 因此 pendingQuestions 暂时恒为空。
+        // question 在本版本实现为 form
+        if let forms = try? await c.getData("/api/form", as: [FormInfo].self) {
+            pendingForms = forms
+        }
         pendingQuestions = []
     }
 
@@ -255,6 +258,14 @@ final class PocketStore {
         } catch { lastError = error.localizedDescription }
     }
 
+    func replyForm(_ form: FormInfo, answer: [String: Any]) async {
+        guard let c = try? client() else { return }
+        do {
+            try await c.postJSON("/api/session/\(form.sessionID)/form/\(form.id)/reply", json: ["answer": answer])
+            await loadPending()
+        } catch { lastError = error.localizedDescription }
+    }
+
     func switchAgent(sessionID: String, agent: String) async {
         guard let c = try? client() else { return }
         do {
@@ -290,6 +301,7 @@ final class PocketStore {
     func pendingCount(for sessionID: String) -> Int {
         pendingPermissions.filter { $0.sessionID == sessionID }.count
             + pendingQuestions.filter { $0.sessionID == sessionID }.count
+            + pendingForms.filter { $0.sessionID == sessionID }.count
     }
 
     var distinctModels: [ModelRef] {

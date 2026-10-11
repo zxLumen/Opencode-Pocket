@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 private struct BottomYKey: PreferenceKey {
     static var defaultValue: CGFloat = .greatestFiniteMagnitude
@@ -7,15 +8,20 @@ private struct BottomYKey: PreferenceKey {
     }
 }
 
+private func dismissKeyboard() {
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+}
+
 struct SessionDetailView: View {
     let sessionID: String
     @Environment(PocketStore.self) private var store
     @State private var messages: [Message] = []
-    @State private var follow = true          // 自动吸底；用户上滑拖动时置 false
+    @State private var follow = true
 
     private var session: Session? { store.session(sessionID) }
     private var permissions: [PendingPermission] { store.pendingPermissions.filter { $0.sessionID == sessionID } }
     private var questions: [PendingQuestion] { store.pendingQuestions.filter { $0.sessionID == sessionID } }
+    private var forms: [FormInfo] { store.pendingForms.filter { $0.sessionID == sessionID } }
     private var isRunning: Bool { store.activeIDs.contains(sessionID) }
     private var live: String { store.liveText[sessionID] ?? "" }
     private var liveR: String { store.liveReasoning[sessionID] ?? "" }
@@ -34,8 +40,9 @@ struct SessionDetailView: View {
 
                         ForEach(permissions) { PermissionCard(permission: $0) }
                         ForEach(questions) { QuestionCard(question: $0) }
+                        ForEach(forms) { FormCard(form: $0) }
 
-                        ForEach(messages) { message in
+                        ForEach(messages.filter { $0.type != "synthetic" }) { message in
                             MessageRow(message: message).id(message.id)
                         }
 
@@ -55,10 +62,8 @@ struct SessionDetailView: View {
                             .id("bottom")
                             .background(
                                 GeometryReader { g in
-                                    Color.clear.preference(
-                                        key: BottomYKey.self,
-                                        value: g.frame(in: .named("scroll")).minY
-                                    )
+                                    Color.clear.preference(key: BottomYKey.self,
+                                                           value: g.frame(in: .named("scroll")).minY)
                                 }
                             )
                     }
@@ -67,25 +72,18 @@ struct SessionDetailView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .coordinateSpace(name: "scroll")
-                .scrollDismissesKeyboard(.interactively)
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 8).onChanged { _ in
-                        follow = false   // 用户开始拖动 → 停止自动吸底
-                    }
-                )
+                .scrollDismissesKeyboard(.immediately)
+                .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in follow = false })
+                .onTapGesture { dismissKeyboard() }   // 点空白处收起键盘
                 .onPreferenceChange(BottomYKey.self) { minY in
-                    // 回到底部附近时恢复自动吸底
                     if minY <= outer.size.height + 30 { follow = true }
                 }
                 .onChange(of: messages.count) { _, _ in if follow { scrollToBottom(proxy) } }
                 .onChange(of: live) { _, _ in if follow { scrollToBottom(proxy) } }
-                .onChange(of: store.refreshTick) { _, _ in
-                    Task { await reload(); if follow { scrollToBottom(proxy) } }
-                }
+                .onChange(of: store.refreshTick) { _, _ in Task { await reload(); if follow { scrollToBottom(proxy) } } }
                 .task(id: isRunning) {
                     await reload()
                     scrollToBottom(proxy, animated: false)
-                    // 运行中：周期性拉取消息，作为流式的兜底（事件之外的实时性保障）
                     while isRunning && !Task.isCancelled {
                         try? await Task.sleep(nanoseconds: 3_000_000_000)
                         if Task.isCancelled { break }
@@ -99,18 +97,18 @@ struct SessionDetailView: View {
         .navigationTitle(session?.displayTitle ?? "会话")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("收起") { dismissKeyboard() }
+            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 agentMenu
                 modelMenu
-                Button {
-                    Task { await store.interrupt(sessionID: sessionID) }
-                } label: { Image(systemName: "stop.circle") }
-                .disabled(!isRunning)
+                Button { Task { await store.interrupt(sessionID: sessionID) } } label: { Image(systemName: "stop.circle") }
+                    .disabled(!isRunning)
             }
         }
-        .safeAreaInset(edge: .bottom) {
-            ComposerView(sessionID: sessionID)
-        }
+        .safeAreaInset(edge: .bottom) { ComposerView(sessionID: sessionID) }
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
@@ -145,9 +143,7 @@ struct SessionDetailView: View {
     private var agentMenu: some View {
         Menu {
             ForEach(store.agents) { agent in
-                Button(agent.displayName) {
-                    Task { await store.switchAgent(sessionID: sessionID, agent: agent.id) }
-                }
+                Button(agent.displayName) { Task { await store.switchAgent(sessionID: sessionID, agent: agent.id) } }
             }
         } label: { Image(systemName: "person.crop.circle") }
     }
@@ -155,16 +151,14 @@ struct SessionDetailView: View {
     private var modelMenu: some View {
         Menu {
             ForEach(store.distinctModels, id: \.label) { model in
-                Button(model.label) {
-                    Task { await store.switchModel(sessionID: sessionID, model: model) }
-                }
+                Button(model.label) { Task { await store.switchModel(sessionID: sessionID, model: model) } }
             }
         } label: { Image(systemName: "cpu") }
     }
 
     private func reload() async {
         let list = await store.loadMessages(sessionID: sessionID)
-        messages = list.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }  // 正序
+        messages = list.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
     }
 }
 
@@ -182,16 +176,12 @@ struct LiveBubble: View {
 struct MessageRow: View {
     let message: Message
 
-    private var text: String {
-        (message.content ?? []).filter { $0.type == "text" }.compactMap { $0.text }.joined(separator: "\n")
-    }
+    private var bodyText: String { message.displayText }
     private var reasoning: String {
         (message.content ?? []).filter { $0.type == "reasoning" }.compactMap { $0.text }.joined(separator: "\n")
     }
-    private var tools: [String] {
-        (message.content ?? []).filter { $0.type == "tool" || $0.type == "tool-call" || $0.type == "tool-invocation" }
-            .compactMap { $0.text }
-    }
+    private var tools: [(name: String, status: String?)] { message.tools }
+
     private var roleLabel: String {
         switch message.type {
         case "user": return "你"
@@ -204,30 +194,59 @@ struct MessageRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(roleLabel).font(.caption2.bold())
-                    .foregroundStyle(message.isUser ? Color.blue : Color.secondary)
-                Spacer()
-                if let agent = message.agent { Text(agent).font(.caption2).foregroundStyle(.tertiary) }
-            }
-            if !text.isEmpty {
-                MarkdownText(text: text)
-                    .textSelection(.enabled)
-            }
-            if !tools.isEmpty {
-                ForEach(tools, id: \.self) { t in
-                    Text("🛠 \(t)").font(.caption).foregroundStyle(.secondary)
+            if message.type == "agent-switched" {
+                HStack(spacing: 8) {
+                    Divider().frame(width: 16)
+                    Text("切换 Agent → \(message.agent ?? "?")")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Divider()
+                }
+            } else {
+                HStack {
+                    Text(roleLabel).font(.caption2.bold())
+                        .foregroundStyle(message.isUser ? Color.blue : Color.secondary)
+                    Spacer()
+                    if let agent = message.agent { Text(agent).font(.caption2).foregroundStyle(.tertiary) }
                 }
             }
+
+            if !bodyText.isEmpty {
+                MarkdownText(text: bodyText).textSelection(.enabled)
+            }
+
+            if !tools.isEmpty {
+                DisclosureGroup("🛠 工具调用 (\(tools.count))") {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(tools.enumerated()), id: \.offset) { _, t in
+                            HStack(spacing: 6) {
+                                Text("🛠 \(t.name)").font(.caption)
+                                if let s = t.status {
+                                    Text(s).font(.caption2).foregroundStyle(statusColor(s))
+                                }
+                            }
+                        }
+                    }
+                    .padding(.top, 2)
+                }
+                .font(.caption2)
+            }
+
             if !reasoning.isEmpty {
                 DisclosureGroup("思考") {
-                    MarkdownText(text: reasoning)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    MarkdownText(text: reasoning).font(.caption).foregroundStyle(.secondary)
                 }
                 .font(.caption2)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func statusColor(_ s: String) -> Color {
+        switch s {
+        case "running": return .orange
+        case "completed", "success": return .green
+        case "error", "failed": return .red
+        default: return .secondary
+        }
     }
 }

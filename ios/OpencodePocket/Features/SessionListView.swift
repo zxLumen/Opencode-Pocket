@@ -37,7 +37,7 @@ struct SessionListView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                if !store.pendingPermissions.isEmpty || !store.pendingQuestions.isEmpty {
+                if !store.pendingPermissions.isEmpty || !store.pendingQuestions.isEmpty || !store.pendingForms.isEmpty {
                     Section("待处理") {
                         ForEach(store.pendingPermissions) { p in
                             Button { open(p.sessionID) } label: { Label(p.title, systemImage: "lock.shield") }
@@ -45,6 +45,11 @@ struct SessionListView: View {
                         ForEach(store.pendingQuestions) { q in
                             Button { open(q.sessionID) } label: {
                                 Label(q.questions.first?.header ?? "提问", systemImage: "questionmark.bubble")
+                            }
+                        }
+                        ForEach(store.pendingForms) { f in
+                            Button { open(f.sessionID) } label: {
+                                Label(f.title, systemImage: "list.bullet.rectangle")
                             }
                         }
                     }
