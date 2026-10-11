@@ -132,16 +132,10 @@ struct SessionDetailView: View {
                 .onPreferenceChange(TopYKey.self) { topMinY = $0 }
                 .onPreferenceChange(ContentHKey.self) { contentHeight = $0 }
                 .onPreferenceChange(ViewHKey.self) { viewportHeight = $0 }
-                .onChange(of: contentHeight) { _, h in
-                    // 布局刚完成：首次立即到底（不依赖 atBottom，因为初始在顶部）
-                    if !didInitialScroll, h > 0 {
-                        didInitialScroll = true
-                        scrollToBottom(proxy, animated: false)
-                    }
-                }
                 .onPreferenceChange(TopYKey.self) { minY in
-                    if minY > -60, olderCursor?.isEmpty == false, !loadingOlder {
-                        Task { await loadOlder() }
+                    // 仅当首次定位到底完成后，才允许"上滑加载更早"（防止进入瞬间误触发导致跳到顶部）
+                    if didInitialScroll, minY > -60, olderCursor?.isEmpty == false, !loadingOlder {
+                        Task { await loadOlder(proxy) }
                     }
                 }
                 .onChange(of: messages.count) { _, _ in if atBottom { scrollToBottom(proxy) } }
@@ -216,15 +210,21 @@ struct SessionDetailView: View {
         if olderCursor == nil, let prev = page.previous { olderCursor = prev; persist() }
     }
 
-    private func loadOlder() async {
-        guard !loadingOlder, let cursor = olderCursor, !cursor.isEmpty else { return }
+    private func loadOlder(_ proxy: ScrollViewProxy) async {
+        guard didInitialScroll, !loadingOlder, let cursor = olderCursor, !cursor.isEmpty else { return }
         loadingOlder = true
+        let anchor = messages.first?.id
         let page = await store.loadMessages(sessionID: sessionID, limit: pageSize, cursor: cursor)
         var byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for m in page.items { byId[m.id] = m }
         messages = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
         olderCursor = page.previous
         persist()
+        // 保持位置：把原来顶部那条重新锚到顶部，避免前插导致跳动
+        if let anchor {
+            try? await Task.sleep(nanoseconds: 30_000_000)
+            proxy.scrollTo(anchor, anchor: .top)
+        }
         loadingOlder = false
     }
 
