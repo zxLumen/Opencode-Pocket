@@ -20,15 +20,13 @@ private func dismissKeyboard() {
 
 struct ExpandableSection<Content: View>: View {
     let title: String
-    let key: String
-    @Binding var expanded: Set<String>
     @ViewBuilder var content: () -> Content
-    private var isOpen: Bool { expanded.contains(key) }
+    @State private var isOpen = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Button {
-                if isOpen { expanded.remove(key) } else { expanded.insert(key) }
+                isOpen.toggle()
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: isOpen ? "chevron.down" : "chevron.right").font(.caption2)
@@ -49,7 +47,6 @@ struct SessionDetailView: View {
     let sessionID: String
     @Environment(PocketStore.self) private var store
     @State private var messages: [Message] = []
-    @State private var expanded: Set<String> = []
     @State private var olderCursor: String?
     @State private var loadingOlder = false
     @State private var follow = true
@@ -89,13 +86,13 @@ struct SessionDetailView: View {
                         }
 
                         ForEach(visibleMessages) { message in
-                            MessageRow(message: message, expanded: $expanded).id(message.id)
+                            MessageRow(message: message).id(message.id)
                         }
 
                         if !live.isEmpty { LiveBubble(text: live).id("live") }
 
                         if !liveR.isEmpty {
-                            ExpandableSection(title: "实时思考", key: "live-r", expanded: $expanded) {
+                            ExpandableSection(title: "实时思考") {
                                 MarkdownText(text: liveR).font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -123,7 +120,6 @@ struct SessionDetailView: View {
                     Color.clear.preference(key: ViewHeightKey.self, value: g.size.height)
                 })
                 .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in follow = false })
-                .onTapGesture { dismissKeyboard() }
                 .onPreferenceChange(ViewHeightKey.self) { viewportHeight = $0 }
                 .onPreferenceChange(BottomYKey.self) { minY in
                     if minY <= viewportHeight + 30 { follow = true }
@@ -270,7 +266,6 @@ struct LiveBubble: View {
 
 struct MessageRow: View {
     let message: Message
-    @Binding var expanded: Set<String>
 
     private var bodyText: String { message.displayText }
     private var reasoning: String {
@@ -310,7 +305,7 @@ struct MessageRow: View {
             }
 
             if !tools.isEmpty {
-                ExpandableSection(title: "🛠 工具调用 (\(tools.count))", key: "tools:\(message.id)", expanded: $expanded) {
+                ExpandableSection(title: "🛠 工具调用 (\(tools.count))") {
                     VStack(alignment: .leading, spacing: 3) {
                         ForEach(Array(tools.enumerated()), id: \.offset) { _, t in
                             HStack(spacing: 6) {
@@ -324,7 +319,7 @@ struct MessageRow: View {
             }
 
             if !reasoning.isEmpty {
-                ExpandableSection(title: "思考", key: "reason:\(message.id)", expanded: $expanded) {
+                ExpandableSection(title: "思考") {
                     MarkdownText(text: reasoning).font(.caption).foregroundStyle(.secondary)
                 }
             }
