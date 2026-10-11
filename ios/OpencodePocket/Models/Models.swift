@@ -71,7 +71,8 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     var isAssistant: Bool { type == "assistant" }
 
     var contentText: String {
-        (content ?? []).compactMap { $0.text }.joined(separator: "\n")
+        // 仅取正文 text 片段；reasoning / tool 片段由各自折叠区展示
+        (content ?? []).filter { $0.type == "text" }.compactMap { $0.text }.joined(separator: "\n")
     }
     /// 顶层 text 优先，否则用 content 里的 text 片段。
     var displayText: String {

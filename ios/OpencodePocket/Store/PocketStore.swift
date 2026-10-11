@@ -129,6 +129,13 @@ final class PocketStore {
         guard let c = try? client() else { return }
         do {
             sessions = try await c.getData("/api/session", as: [Session].self)
+            // 首次见到的会话基准为「已读」，避免一打开全变绿
+            var changed = false
+            for s in sessions where lastViewedAt[s.id] == nil {
+                lastViewedAt[s.id] = s.time?.updated ?? 0
+                changed = true
+            }
+            if changed { Prefs.viewed = lastViewedAt }
         } catch { lastError = error.localizedDescription }
         await loadActive()
     }

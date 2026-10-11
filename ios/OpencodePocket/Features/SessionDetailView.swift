@@ -33,8 +33,10 @@ struct ExpandableSection<Content: View>: View {
                 HStack(spacing: 5) {
                     Image(systemName: isOpen ? "chevron.down" : "chevron.right").font(.caption2)
                     Text(title).font(.caption2)
+                    Spacer(minLength: 0)
                 }
-                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 3)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -121,7 +123,7 @@ struct SessionDetailView: View {
                     Color.clear.preference(key: ViewHeightKey.self, value: g.size.height)
                 })
                 .simultaneousGesture(DragGesture(minimumDistance: 8).onChanged { _ in follow = false })
-                .simultaneousGesture(TapGesture().onEnded { dismissKeyboard() })
+                .onTapGesture { dismissKeyboard() }
                 .onPreferenceChange(ViewHeightKey.self) { viewportHeight = $0 }
                 .onPreferenceChange(BottomYKey.self) { minY in
                     if minY <= viewportHeight + 30 { follow = true }

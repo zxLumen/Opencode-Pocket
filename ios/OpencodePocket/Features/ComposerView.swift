@@ -7,7 +7,7 @@ struct ComposerView: View {
     @Environment(PocketStore.self) private var store
     @State private var text = ""
     @State private var attachments: [Attachment] = []
-    @State private var photoItem: PhotosPickerItem?
+    @State private var photoItems: [PhotosPickerItem] = []
     @State private var speech = SpeechRecognizer()
     @State private var speechBase = ""
     @State private var uploading = false
@@ -45,7 +45,7 @@ struct ComposerView: View {
             }
 
             HStack(alignment: .bottom, spacing: 8) {
-                PhotosPicker(selection: $photoItem, matching: .images) {
+                PhotosPicker(selection: $photoItems, maxSelectionCount: 10, matching: .images) {
                     Image(systemName: "photo")
                         .font(.system(size: 20))
                         .foregroundStyle(uploading ? Color.secondary : Color.accentColor)
@@ -81,7 +81,7 @@ struct ComposerView: View {
         .padding(.bottom, 8)
         .background(Color(.systemBackground))
         .overlay(Divider(), alignment: .top)
-        .onChange(of: photoItem) { _, item in Task { await handlePhoto(item) } }
+        .onChange(of: photoItems) { _, items in Task { await handlePhotos(items) } }
         .onChange(of: speech.transcript) { _, t in
             guard speech.isRecording else { return }
             // 追加到已有内容之后（不覆盖），并随识别结果实时增长
@@ -99,16 +99,20 @@ struct ComposerView: View {
         }
     }
 
-    private func handlePhoto(_ item: PhotosPickerItem?) async {
-        guard let item else { return }
+    private func handlePhotos(_ items: [PhotosPickerItem]) async {
+        guard !items.isEmpty else { return }
         uploading = true
-        defer { uploading = false; photoItem = nil }
-        guard let data = try? await item.loadTransferable(type: Data.self),
-              let image = UIImage(data: data),
-              let jpeg = image.jpegData(compressionQuality: 0.8) else { return }
-        let name = "photo-\(Int(Date().timeIntervalSince1970)).jpg"
-        if let att = await store.uploadImage(jpeg, contentType: "image/jpeg", name: name) {
-            attachments.append(att)
+        defer { uploading = false; photoItems = [] }
+        var index = 0
+        for item in items {
+            index += 1
+            guard let data = try? await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data),
+                  let jpeg = image.jpegData(compressionQuality: 0.8) else { continue }
+            let name = "photo-\(Int(Date().timeIntervalSince1970))-\(index).jpg"
+            if let att = await store.uploadImage(jpeg, contentType: "image/jpeg", name: name) {
+                attachments.append(att)
+            }
         }
     }
 
