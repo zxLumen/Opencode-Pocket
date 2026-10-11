@@ -37,6 +37,7 @@ final class PocketStore {
     var pendingPermissions: [PendingPermission] = []
     var pendingQuestions: [PendingQuestion] = []
     var liveText: [String: String] = [:]
+    var liveReasoning: [String: String] = [:]
     var lastError: String?
     var serverVersion: String?
     var refreshTick = 0
@@ -51,6 +52,8 @@ final class PocketStore {
     var deepLinkSessionID: String?
 
     private var eventTask: Task<Void, Never>?
+    private var pollTask: Task<Void, Never>?
+    private var pollTick = 0
 
     // MARK: - Connection
 
@@ -71,6 +74,7 @@ final class PocketStore {
             phase = .connected
             await refreshAll()
             startEvents()
+            startPolling()
         } catch {
             phase = .failed(error.localizedDescription)
             lastError = error.localizedDescription
@@ -80,6 +84,8 @@ final class PocketStore {
     func disconnect() {
         eventTask?.cancel()
         eventTask = nil
+        pollTask?.cancel()
+        pollTask = nil
         phase = .disconnected
     }
 
@@ -153,39 +159,56 @@ final class PocketStore {
         }
     }
 
+    /// 周期性刷新活动会话与列表（事件之外的安全网，做到"无需手动刷新"）。
+    private func startPolling() {
+        pollTask?.cancel()
+        pollTick = 0
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self else { break }
+                await self.loadActive()
+                self.pollTick += 1
+                if self.pollTick % 2 == 0 { await self.loadSessions() }
+                await self.loadPending()
+            }
+        }
+    }
+
     private func handle(_ event: OpenCodeEvent) {
         let type = event.type
-        if type.hasSuffix("text.delta") || type.hasSuffix("reasoning.delta") || type == "message.part.delta" {
-            if let sid = event.sessionID, let d = event.delta ?? event.text {
-                if type.hasSuffix("reasoning.delta") {
-                    // keep reasoning separate; currently merged with a marker
-                    liveText[sid, default: ""] += d
-                } else {
-                    liveText[sid, default: ""] += d
-                }
+        let sid = event.sessionID
+
+        // 流式增量（回答 / 思考）
+        if type.contains("delta"), let sid {
+            let d = event.delta ?? event.text ?? ""
+            if !d.isEmpty {
+                if type.contains("reasoning") { liveReasoning[sid, default: ""] += d }
+                else { liveText[sid, default: ""] += d }
             }
             return
         }
+
         if type.contains("permission") || type.contains("question") {
             Task { await loadPending() }
             return
         }
-        if type.hasPrefix("session.") {
-            switch type {
-            case "session.idle":
-                if let sid = event.sessionID {
-                    activeIDs.remove(sid)
-                    liveText[sid] = ""
-                }
-                refreshTick += 1
-                Task { await loadSessions() }
-            case "session.created", "session.updated", "session.deleted":
-                Task { await loadSessions() }
-            case "session.error":
-                Task { await refreshAll() }
-            default:
-                break
-            }
+
+        guard type.hasPrefix("session.") || type.hasPrefix("message.") else { return }
+        switch type {
+        case "session.idle", "session.execution.failed", "session.execution.completed":
+            if let sid { activeIDs.remove(sid); liveText[sid] = ""; liveReasoning[sid] = "" }
+            refreshTick += 1
+            Task { await loadSessions(); await loadPending() }
+        case "session.created", "session.updated", "session.deleted", "session.status":
+            Task { await loadSessions() }
+        case "session.execution.started", "session.step.started", "session.status":
+            if let sid { activeIDs.insert(sid) }
+            Task { await loadActive() }
+        case "session.error":
+            Task { await refreshAll() }
+        default:
+            if let sid, type.contains("tool") { activeIDs.insert(sid) }
         }
     }
 

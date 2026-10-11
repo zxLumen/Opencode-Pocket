@@ -18,6 +18,7 @@ struct SessionDetailView: View {
     private var questions: [PendingQuestion] { store.pendingQuestions.filter { $0.sessionID == sessionID } }
     private var isRunning: Bool { store.activeIDs.contains(sessionID) }
     private var live: String { store.liveText[sessionID] ?? "" }
+    private var liveR: String { store.liveReasoning[sessionID] ?? "" }
 
     var body: some View {
         GeometryReader { outer in
@@ -40,6 +41,13 @@ struct SessionDetailView: View {
 
                         if !live.isEmpty {
                             LiveBubble(text: live).id("live")
+                        }
+                        if !liveR.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Label("实时思考", systemImage: "brain")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                MarkdownText(text: liveR).font(.caption).foregroundStyle(.secondary)
+                            }
                         }
 
                         Color.clear
@@ -74,7 +82,17 @@ struct SessionDetailView: View {
                 .onChange(of: store.refreshTick) { _, _ in
                     Task { await reload(); if follow { scrollToBottom(proxy) } }
                 }
-                .task { await reload(); await MainActor.run { scrollToBottom(proxy, animated: false) } }
+                .task(id: isRunning) {
+                    await reload()
+                    scrollToBottom(proxy, animated: false)
+                    // 运行中：周期性拉取消息，作为流式的兜底（事件之外的实时性保障）
+                    while isRunning && !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                        if Task.isCancelled { break }
+                        await reload()
+                        if follow { scrollToBottom(proxy) }
+                    }
+                }
                 .refreshable { await reload() }
             }
         }

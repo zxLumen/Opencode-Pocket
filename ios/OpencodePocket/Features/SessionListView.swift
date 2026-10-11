@@ -4,13 +4,26 @@ struct SessionListView: View {
     @Environment(PocketStore.self) private var store
     @State private var path: [String] = []
     @State private var showSettings = false
+    @State private var search = ""
+    @State private var collapsed: Set<String> = []
+
+    private var filtered: [Session] {
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return store.sessions }
+        return store.sessions.filter { s in
+            s.displayTitle.lowercased().contains(q)
+                || s.projectName.lowercased().contains(q)
+                || (s.directory?.lowercased().contains(q) ?? false)
+                || (s.agent?.lowercased().contains(q) ?? false)
+        }
+    }
 
     private var groups: [(String, [Session])] {
-        Dictionary(grouping: store.sessions, by: { $0.projectName })
+        Dictionary(grouping: filtered, by: { $0.projectName })
             .map { (key, value) in
                 (key, value.sorted { ($0.time?.updated ?? 0) > ($1.time?.updated ?? 0) })
             }
-            .sorted { $0.0 < $1.0 }
+            .sorted { $0.0.localizedCaseInsensitiveCompare($1.0) == .orderedAscending }
     }
 
     var body: some View {
@@ -19,9 +32,7 @@ struct SessionListView: View {
                 if !store.pendingPermissions.isEmpty || !store.pendingQuestions.isEmpty {
                     Section("待处理") {
                         ForEach(store.pendingPermissions) { p in
-                            Button { open(p.sessionID) } label: {
-                                Label(p.title, systemImage: "lock.shield")
-                            }
+                            Button { open(p.sessionID) } label: { Label(p.title, systemImage: "lock.shield") }
                         }
                         ForEach(store.pendingQuestions) { q in
                             Button { open(q.sessionID) } label: {
@@ -32,11 +43,25 @@ struct SessionListView: View {
                 }
 
                 ForEach(groups, id: \.0) { name, sessions in
-                    Section(name) {
-                        ForEach(sessions) { session in
-                            Button { path.append(session.id) } label: { SessionRow(session: session) }
-                                .buttonStyle(.plain)
+                    Section {
+                        if !collapsed.contains(name) {
+                            ForEach(sessions) { session in
+                                Button { path.append(session.id) } label: { SessionRow(session: session) }
+                                    .buttonStyle(.plain)
+                            }
                         }
+                    } header: {
+                        Button { toggle(name) } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: collapsed.contains(name) ? "chevron.right" : "chevron.down")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                Text(name).font(.subheadline.weight(.semibold))
+                                Spacer()
+                                Text("\(sessions.count)").font(.caption).foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
 
@@ -44,6 +69,8 @@ struct SessionListView: View {
                     Text("暂无会话").foregroundStyle(.secondary)
                 }
             }
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
+                        prompt: "搜索会话（标题 / 工程 / 目录 / agent）")
             .navigationTitle("会话")
             .refreshable { await store.refreshAll() }
             .toolbar {
@@ -65,6 +92,10 @@ struct SessionListView: View {
                 }
             }
         }
+    }
+
+    private func toggle(_ name: String) {
+        if collapsed.contains(name) { collapsed.remove(name) } else { collapsed.insert(name) }
     }
 
     private func open(_ sessionID: String?) {
