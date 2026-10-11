@@ -9,6 +9,7 @@ struct ComposerView: View {
     @State private var attachments: [Attachment] = []
     @State private var photoItem: PhotosPickerItem?
     @State private var speech = SpeechRecognizer()
+    @State private var speechBase = ""
     @State private var uploading = false
 
     private var canSend: Bool {
@@ -55,7 +56,7 @@ struct ComposerView: View {
                     .lineLimit(1...5)
                     .font(.body)
 
-                Button { speech.toggle() } label: {
+                Button { toggleSpeech() } label: {
                     Image(systemName: speech.isRecording ? "mic.fill" : "mic")
                         .font(.system(size: 20))
                         .foregroundStyle(speech.isRecording ? Color.red : Color.accentColor)
@@ -81,8 +82,21 @@ struct ComposerView: View {
         .background(Color(.systemBackground))
         .overlay(Divider(), alignment: .top)
         .onChange(of: photoItem) { _, item in Task { await handlePhoto(item) } }
-        .onChange(of: speech.transcript) { _, t in if speech.isRecording { text = t } }
+        .onChange(of: speech.transcript) { _, t in
+            guard speech.isRecording else { return }
+            // 追加到已有内容之后（不覆盖），并随识别结果实时增长
+            text = speechBase.isEmpty ? t : speechBase + t
+        }
         .onDisappear { speech.stop() }
+    }
+
+    private func toggleSpeech() {
+        if speech.isRecording {
+            speech.stop()
+        } else {
+            speechBase = text   // 记住当前输入框内容作为前缀
+            speech.toggle()
+        }
     }
 
     private func handlePhoto(_ item: PhotosPickerItem?) async {
