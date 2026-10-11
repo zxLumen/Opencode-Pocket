@@ -44,6 +44,8 @@ cd ~/Projects/Opencode-Pocket
 | `ai.opencode.pocket.pocketd` | 订阅事件 → 通知 |
 
 编辑 `~/.config/opencode-pocket/env` 填入 `VPS_HOST` / `VPS_USER` / `NTFY_TOPIC`。
+其中 `VPS_TUNNEL_BIND=0.0.0.0` 表示把转发绑到 VPS（Caddy 容器可经 `host.docker.internal` 访问）；
+该端口不对公网开放，仅 Docker 网段可达。详见 `docs/vps-setup.md`。
 
 ## 2. 手动控制
 

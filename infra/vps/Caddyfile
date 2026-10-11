@@ -1,27 +1,25 @@
-# Opencode-Pocket — VPS reverse proxy for opencode server on Mac.
-# TLS is issued automatically by Caddy (Let's Encrypt).
-# Auth is handled by opencode itself (HTTP Basic), so we do NOT add basic_auth here.
+# Opencode-Pocket — 追加到 VPS 上「现有 Caddy 容器」的 Caddyfile 的片段。
+#
+# VPS 上已有一个 caddy:2 容器（docker-caddy-1）占用 80/443，统一管理 example.com 下所有站点。
+# 不要另装 Caddy；把下面这段追加到 /home/ubuntu/zxLumen-Blog/docker/Caddyfile 末尾，
+# 然后 `docker exec docker-caddy-1 caddy reload --config /etc/caddy/Caddyfile` 即可。
+#
+# 前置：
+#   1) sshd_config 设 GatewayPorts clientspecified（允许反向转发绑定到 172.17.0.1）
+#   2) ufw 放行 Docker 网段到宿主机 4096（不放行公网）：
+#        sudo ufw allow from 172.16.0.0/12 to any port 4096 proto tcp
+#   3) Mac 侧隧道绑定 VPS_TUNNEL_BIND=0.0.0.0（Caddy 容器可访问；由 ufw 限制非公网）
+#
+# 说明：host.docker.internal 由 compose 的 extra_hosts 映射为 docker0 网关(172.17.0.1)。
 
-pocket.example.com {
+pocket.{$DOMAIN} {
 	encode zstd gzip
-
-	reverse_proxy 127.0.0.1:4096 {
-		# Required for Server-Sent Events (/api/event) — disable buffering.
-		flush_interval -1
-	}
-
 	header {
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		X-Content-Type-Options "nosniff"
+		X-Content-Type-Options nosniff
 		-Server
 	}
-
-	log {
-		output file /var/log/caddy/pocket-access.log
-		format json
+	reverse_proxy host.docker.internal:4096 {
+		# SSE（/api/event）必须关闭缓冲
+		flush_interval -1
 	}
-
-	# Optional hardening: allow only your networks (uncomment and adjust).
-	# @blocked not remote_ip 100.64.0.0/10 <your.home.ip>/32
-	# respond @blocked 403
 }

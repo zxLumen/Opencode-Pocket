@@ -42,6 +42,9 @@ VPS_HOST=your-vps-host
 VPS_USER=ubuntu
 VPS_SSH_PORT=22
 TUNNEL_PORT=4096
+# Address on the VPS to bind the forwarded port. 0.0.0.0 is required so the Caddy
+# container can reach it; it is NOT public because ufw only allows 172.16.0.0/12 to hit 4096.
+VPS_TUNNEL_BIND=0.0.0.0
 
 # pocketd
 POCKETD_PORT=8788

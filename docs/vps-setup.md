@@ -1,48 +1,65 @@
-# VPS 侧部署（your-vps-host，Ubuntu）
+# VPS 侧部署（your-vps-host）
+
+本机（VPS）已用 **Docker + Caddy 容器**（`docker-caddy-1`, caddy:2）统一管理 `example.com` 下所有站点。
+**不要另装 Caddy**（80/443 已被占用）。只需三步把它接进来。
 
 ## 前置
 
-- 域名 `pocket.example.com` 的 A 记录指向 `your-vps-host`。
-- 安全组/防火墙放行 80、443（Caddy 签发证书需要 80；正常代理走 443）。
-- 无需备案。
+- DNS：`pocket.example.com` A 记录 → `your-vps-host`
+- Caddyfile：`/home/ubuntu/zxLumen-Blog/docker/Caddyfile`（由 compose 挂载）
+- Caddy 容器已配 `extra_hosts: ["host.docker.internal:host-gateway"]`
 
-## 1. 安装 Caddy
-
-```bash
-sudo apt update
-sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update && sudo apt install -y caddy
-```
-
-## 2. 写入 Caddyfile
+## 1. 允许反向转发绑定到 Docker 网关
 
 ```bash
-cd ~/Projects/Opencode-Pocket    # 在 Mac 上；或把 infra/vps/Caddyfile scp 到 VPS
-scp infra/vps/Caddyfile ubuntu@your-vps-host:/tmp/Caddyfile
-ssh ubuntu@your-vps-host 'sudo cp /tmp/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy && sudo systemctl status caddy --no-pager'
+sudo sed -i -E 's/^[[:space:]]*#?[[:space:]]*GatewayPorts.*/GatewayPorts clientspecified/I' /etc/ssh/sshd_config
+# 若原本没有该行：echo 'GatewayPorts clientspecified' | sudo tee -a /etc/ssh/sshd_config
+sudo sshd -t && sudo systemctl reload ssh
 ```
 
-或用脚本：
+## 2. 放行容器访问宿主机 4096（仅 Docker 网段，不暴露公网）
 
 ```bash
-./infra/vps/install-vps.sh
+sudo ufw allow from 172.16.0.0/12 to any port 4096 proto tcp
 ```
 
-## 3. 隧道
+> 原理：VPS 的 `INPUT` 策略是 DROP；容器访问宿主机端口属于 INPUT。参照现有 `mail` 站点的做法（它放行了 8443）。
 
-隧道由 Mac 侧 launchd 服务 `ai.opencode.pocket.tunnel` 建立（Mac 出站 ssh -R）。
-VPS 上无需常驻进程，只需 SSH 服务可用。
+## 3. 追加站点并重载 Caddy
 
-验证（VPS 上）：
+把 [`../infra/vps/Caddyfile`](../infra/vps/Caddyfile) 的片段追加到 Caddyfile 末尾：
 
 ```bash
-curl -su opencode:$PW http://127.0.0.1:4096/api/info
+cat >> /home/ubuntu/zxLumen-Blog/docker/Caddyfile <<'CADDY'
+
+pocket.{$DOMAIN} {
+	encode zstd gzip
+	header {
+		X-Content-Type-Options nosniff
+		-Server
+	}
+	reverse_proxy host.docker.internal:4096 {
+		flush_interval -1
+	}
+}
+CADDY
+
+sudo docker exec docker-caddy-1 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+sudo docker exec docker-caddy-1 caddy reload   --config /etc/caddy/Caddyfile --adapter caddyfile
 ```
 
-## 4. 加固（可选）
+Caddy 会自动为该域名签发 Let's Encrypt 证书。
 
-- 限制 SSH 来源：`ufw allow from <你的常用网段> to any port 22`。
-- fail2ban。
-- Caddy 层 IP 白名单（在 Caddyfile 中加 `@allow` 指令）。
+## 验证（在 Mac 上）
+
+```bash
+PW=$(python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.config/opencode/service.json')))['password'])")
+curl -u opencode:$PW https://pocket.example.com/api/info   # 期望 200 + version 2.0.x
+```
+
+## 架构要点
+
+- Mac 侧 ssh -R 把本机 4096 绑到 VPS 的 `0.0.0.0:4096`（Caddy 容器经 `host.docker.internal` 访问）。
+- Caddy 容器经 `host.docker.internal:4096`(=172.17.0.1) 访问 Mac 的 opencode 服务。
+- 公网只开 443；4096 仅对 Docker 网段开放（ufw 限制，实测公网不可达）。
+- 认证由 opencode 自身提供（HTTP Basic）。
