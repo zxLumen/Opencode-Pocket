@@ -60,8 +60,10 @@ async function main() {
       cache.refresh();
     }
     const result = evaluate(event);
-    if (/session\.(execution|idle)/.test(event?.type || '')) {
-      log.info(`event: ${event.type} session=${event?.data?.sessionID ?? event?.sessionID ?? '-'}`)
+    const t = event?.type || '';
+    if (/session\.(execution|idle)/.test(t) || /form|permission|question/i.test(t)) {
+      const keys = Object.keys(event?.data || {}).slice(0, 12).join(',');
+      log.info(`event: ${t} session=${event?.data?.sessionID ?? event?.sessionID ?? '-'} dataKeys=[${keys}]`)
     }
     if (!result) return;
 

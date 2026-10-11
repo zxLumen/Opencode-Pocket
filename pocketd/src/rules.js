@@ -14,10 +14,10 @@ function describePermission(data = {}) {
   return perm || '某个操作正在等待你的授权';
 }
 
-function describeForm(data = {}) {
-  const title = firstString(data.title, data.header, data.question);
-  const fields = Array.isArray(data.fields)
-    ? data.fields.map((f) => f?.title || f?.key).filter(Boolean).slice(0, 4).join(' / ')
+function describeForm(form = {}) {
+  const title = firstString(form.title, form.header, form.question);
+  const fields = Array.isArray(form.fields)
+    ? form.fields.map((f) => f?.title || f?.key).filter(Boolean).slice(0, 4).join(' / ')
     : '';
   if (title && fields) return `${title}\n${fields}`;
   return title || fields || 'agent 正在等待你的回答';
@@ -36,7 +36,7 @@ export function evaluate(event) {
 
   // 审批
   if (/permission/i.test(type) && /ask|request/i.test(type)) {
-    const rid = data.id || data.requestID || data.permissionID || sessionID;
+    const rid = data.id || data.requestID || data.permissionID || data.permission?.id || event.id || sessionID;
     return {
       key: `permission:${rid}`,
       notification: { ...base, title: '需要审批', body: describePermission(data), priority: 'high', tags: ['lock', 'warning'] },
@@ -45,10 +45,11 @@ export function evaluate(event) {
 
   // 提问 / 表单（本版本 question 实现为 form.created）
   if ((/form/i.test(type) && /created|ask/i.test(type)) || (/question/i.test(type) && /ask|request/i.test(type))) {
-    const rid = data.id || data.formID || data.requestID || sessionID;
+    const form = data.form || data;
+    const rid = form?.id || data.formID || data.id || data.requestID || event.id || sessionID;
     return {
       key: `form:${rid}`,
-      notification: { ...base, title: '需要回答', body: describeForm(data), priority: 'high', tags: ['question'] },
+      notification: { ...base, title: '需要回答', body: describeForm(form), priority: 'high', tags: ['question'] },
     };
   }
 
