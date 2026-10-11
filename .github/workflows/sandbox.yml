@@ -1,0 +1,55 @@
+name: sandbox
+
+# 构建并推送访客沙盒镜像(ghcr.io/<owner>/opencode-play:<sha> + :latest)。
+# 只改了 infra/vps/sandbox/ 才触发,所以本仓库的 iOS/pocketd 改动不会重建沙盒镜像。
+#
+# 部署不在本 workflow 里做:服务器用 cron 轮询本仓库 main 的 SHA,
+# 看到对应 sha 的镜像已就绪就自动 deploy(见 infra/vps/sandbox/auto-deploy.sh)。
+# 原因:GitHub runner 连云安全组的 22 端口常被丢弃,CI 直接 SSH 会超时。
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/vps/sandbox/**'
+      - '.github/workflows/sandbox.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 仓库公开 → 镜像默认公开 → 服务器可匿名 pull,无需在服务器存任何凭据。
+      - name: Compute image name (lowercase)
+        id: img
+        run: |
+          echo "play=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/opencode-play" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push opencode-play image
+        uses: docker/build-push-action@v6
+        with:
+          context: infra/vps/sandbox
+          file: infra/vps/sandbox/Dockerfile
+          push: true
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ${{ steps.img.outputs.play }}:${{ github.sha }}
+            ${{ steps.img.outputs.play }}:latest

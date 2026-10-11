@@ -32,6 +32,7 @@ Mac
 | `docs/` | 架构、API 备注、部署指引 |
 | `infra/mac/` | Mac 侧 launchd plist、autossh 隧道、安装脚本 |
 | `infra/vps/` | VPS 侧 Caddyfile、安装脚本 |
+| `infra/vps/sandbox/` | 公开访客沙盒 `code-sandbox.{$DOMAIN}`：镜像 / compose / 边缘 Caddy / 部署脚本（见 `docs/vps-sandbox.md`） |
 | `pocketd/` | Mac 常驻守护进程：订阅事件、触发推送 |
 | `ios/` | SwiftUI App（XcodeGen 生成工程） |
 

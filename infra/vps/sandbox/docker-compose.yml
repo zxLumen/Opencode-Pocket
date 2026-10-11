@@ -1,0 +1,115 @@
+# ============================================================================
+# 访客沙盒栈(独立于博客栈):公开的 opencode web —— code-sandbox.{$DOMAIN}
+#
+# 三个服务:
+#   sandbox-caddy   承载全部「访客锁定」逻辑的边缘 Caddy(:80);博客栈的 Caddy 只做
+#                   TLS + 转发到本服务(见 infra/vps/sandbox/Caddyfile)。
+#   opencode-play   沙盒本体(opencode web :4096),隔离边界=容器(非 root / 只读根 /
+#                   cap 全剥 / 资源限额;只挂 /workspace 与家目录)。
+#   opencode-play-init  一次性:就绪后确保「唯一固定会话」存在(卷被清空也能自愈)。
+#
+# ⚠️ 与博客栈刻意保留的两处共享(搬不走):
+#   - 网络 docker_play(external):沙盒要访问博客 AI 网关(app:3000/api/ai/v1);
+#     博客 Caddy 要访问本栈的 sandbox-caddy。
+#   - 卷 docker_playground-*(external):会话/工作区数据,跨栈复用,不会被 `down -v` 清掉。
+#
+# 部署:./deploy.sh(或 ./auto-deploy.sh,cron 轮询本仓库 main 的 SHA)。
+# ============================================================================
+name: sandbox
+
+services:
+  # 边缘 Caddy:code-sandbox 的访客锁定(重定向 + 写入白名单 + 自建外壳)都在它的
+  # Caddyfile 里;不发布端口,凭 docker_play 网络给博客栈的 Caddy 用。
+  sandbox-caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      # 锁定用的唯一会话 id(Caddyfile 里的 {$PLAYGROUND_SESSION_ID:ses_guest} 读它)
+      PLAYGROUND_SESSION_ID: ${PLAYGROUND_SESSION_ID:-ses_guest}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - sandbox-caddy-data:/data
+      - sandbox-caddy-config:/config
+    expose:
+      - "80"
+    networks:
+      - play
+
+  # 沙盒本体(镜像由本仓库 CI 构建:infra/vps/sandbox/Dockerfile)。
+  opencode-play:
+    image: ghcr.io/zxlumen/opencode-play:${OPENCODE_PLAY_TAG:-latest}
+    restart: unless-stopped
+    # 注意:这里**不要** env_file: .env —— 会把无关密钥注入这个匿名可玩的容器。
+    # 只传它真正需要的网关令牌,由 compose 从本目录 .env 插值 ${PLAYGROUND_AI_TOKEN}。
+    environment:
+      # 博客 AI 网关令牌(博客 admin「AI 密钥」页签发:每日 token 上限 + 便宜模型)
+      ZX_AI_APP_TOKEN: ${PLAYGROUND_AI_TOKEN:-}
+    init: true
+    user: "10001:10001"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    tmpfs:
+      - /tmp:rw,size=64m,mode=1777
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 256
+    volumes:
+      # 访客共享工作区(可写)
+      - playground-data:/workspace
+      # 家目录(会话/状态/配置);配置内容每次启动由 entrypoint 覆盖回出厂值
+      - playground-home:/home/opencode
+    expose:
+      - "4096"
+    networks:
+      - play
+
+  # 一次性初始化容器:等沙盒就绪后,确保「唯一固定会话」存在(卷被清空/首启时自动补建)。
+  # 访客侧由 sandbox-caddy 锁定:只能进这一条会话(见 Caddyfile)。
+  # 注意脚本里的 $ 全部写成 $$,否则会被 compose 当成变量插值。
+  opencode-play-init:
+    image: curlimages/curl:8.11.1
+    restart: "no"
+    depends_on:
+      - opencode-play
+    environment:
+      SESSION_ID: ${PLAYGROUND_SESSION_ID:-ses_guest}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        base="http://opencode-play:4096"
+        i=0
+        until curl -fsS "$$base/global/health" >/dev/null 2>&1 || [ "$$i" -ge 60 ]; do
+          i=$$((i+1)); sleep 2
+        done
+        if curl -fsS -o /dev/null "$$base/session/$$SESSION_ID"; then
+          echo "[init] 会话 $$SESSION_ID 已存在"
+          exit 0
+        fi
+        curl -fsS -X POST "$$base/api/session" \
+          -H 'content-type: application/json' \
+          -d "{\"id\":\"$$SESSION_ID\",\"location\":{\"directory\":\"/workspace\"}}" \
+          && echo "[init] 已补建会话 $$SESSION_ID"
+        curl -fsS -X PATCH "$$base/session/$$SESSION_ID" \
+          -H 'content-type: application/json' -d '{"title":"访客沙盒"}' >/dev/null || true
+    networks:
+      - play
+
+volumes:
+  sandbox-caddy-data:
+  sandbox-caddy-config:
+  # 跨栈复用博客栈创建的卷(里面是访客会话与工作区,必须保留)
+  playground-data:
+    external: true
+    name: docker_playground-data
+  playground-home:
+    external: true
+    name: docker_playground-home
+
+networks:
+  # 博客栈创建的共享内网:app(AI 网关)+ caddy(反代)都在上面
+  play:
+    external: true
+    name: docker_play
