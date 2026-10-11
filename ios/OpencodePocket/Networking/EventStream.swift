@@ -15,7 +15,7 @@ enum EventStream {
                     }
                     if Task.isCancelled { break }
                     attempts += 1
-                    let backoff = min(pow(2.0, Double(attempts)), 30)
+                    let backoff = min(pow(2.0, Double(max(attempts - 1, 0))), 10)
                     try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
                 }
                 continuation.finish()

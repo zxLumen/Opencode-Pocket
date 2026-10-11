@@ -14,10 +14,6 @@ private struct ViewHeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
-private func dismissKeyboard() {
-    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-}
-
 struct ExpandableSection<Content: View>: View {
     let title: String
     @ViewBuilder var content: () -> Content
@@ -25,9 +21,7 @@ struct ExpandableSection<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Button {
-                isOpen.toggle()
-            } label: {
+            Button { isOpen.toggle() } label: {
                 HStack(spacing: 5) {
                     Image(systemName: isOpen ? "chevron.down" : "chevron.right").font(.caption2)
                     Text(title).font(.caption2)
@@ -67,7 +61,6 @@ struct SessionDetailView: View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    // 非惰性 VStack：消息量有限（分页），避免 LazyVStack 在键盘/尺寸变化时不重排导致空白
                     VStack(alignment: .leading, spacing: 14) {
                         Color.clear
                             .frame(height: 1)
@@ -113,7 +106,7 @@ struct SessionDetailView: View {
                     .padding(.bottom, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .defaultScrollAnchor(.bottom)     // 初始即在底部（原生，避免手动 scrollTo 的空白/错位）
+                .defaultScrollAnchor(.bottom)
                 .coordinateSpace(name: "scroll")
                 .scrollDismissesKeyboard(.interactively)
                 .background(GeometryReader { g in
@@ -131,10 +124,8 @@ struct SessionDetailView: View {
                 }
                 .onChange(of: messages.count) { _, _ in if follow { scrollToBottom(proxy) } }
                 .onChange(of: live) { _, _ in if follow { scrollToBottom(proxy) } }
-                .onChange(of: store.refreshTick) { _, _ in
-                    Task { await refreshNewest(); if follow { scrollToBottom(proxy) } }
-                }
-                .task(id: isRunning) {
+                .onChange(of: store.refreshTick) { _, _ in Task { await refreshNewest(); if follow { scrollToBottom(proxy) } } }
+                .task {
                     seedFromCache()
                     store.markViewed(sessionID)
                     if messages.isEmpty {
@@ -143,8 +134,9 @@ struct SessionDetailView: View {
                     } else {
                         await refreshNewest()
                     }
-                    while isRunning && !Task.isCancelled {
-                        try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    // 打开期间始终高频刷新（不依赖"运行中"判定）
+                    while !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 2_000_000_000)
                         if Task.isCancelled { break }
                         await refreshNewest()
                         if follow { scrollToBottom(proxy) }
@@ -190,26 +182,23 @@ struct SessionDetailView: View {
         persist()
     }
 
-    /// 运行中只增量刷新最新一页，保留已加载的更早内容。
+    /// 拉取最新一页并**按 id 合并**（同一条消息用最新内容覆盖，修复"只看到第一段思考/看不到答案"）。
     private func refreshNewest() async {
         let page = await store.loadMessages(sessionID: sessionID, limit: pageSize)
-        let newest = page.items.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
-        let existing = Set(messages.map { $0.id })
-        let fresh = newest.filter { !existing.contains($0.id) }
-        if !fresh.isEmpty {
-            messages.append(contentsOf: fresh)
-            persist()
-        }
-        if olderCursor == nil, let prev = page.previous { olderCursor = prev; persist() }
+        var byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for m in page.items { byId[m.id] = m }
+        messages = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
+        if olderCursor == nil, let prev = page.previous { olderCursor = prev }
+        persist()
     }
 
     private func loadOlder() async {
         guard !loadingOlder, let cursor = olderCursor, !cursor.isEmpty else { return }
         loadingOlder = true
         let page = await store.loadMessages(sessionID: sessionID, limit: pageSize, cursor: cursor)
-        let older = page.items.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
-        let existing = Set(messages.map { $0.id })
-        messages = older.filter { !existing.contains($0.id) } + messages
+        var byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for m in page.items { byId[m.id] = m }
+        messages = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
         olderCursor = page.previous
         persist()
         loadingOlder = false
@@ -267,12 +256,6 @@ struct LiveBubble: View {
 struct MessageRow: View {
     let message: Message
 
-    private var bodyText: String { message.displayText }
-    private var reasoning: String {
-        (message.content ?? []).filter { $0.type == "reasoning" }.compactMap { $0.text }.joined(separator: "\n")
-    }
-    private var tools: [(name: String, status: String?)] { message.tools }
-
     private var roleLabel: String {
         switch message.type {
         case "user": return "你"
@@ -300,31 +283,43 @@ struct MessageRow: View {
                 }
             }
 
-            if !bodyText.isEmpty {
-                MarkdownText(text: bodyText).textSelection(.enabled)
-            }
-
-            if !tools.isEmpty {
-                ExpandableSection(title: "🛠 工具调用 (\(tools.count))") {
-                    VStack(alignment: .leading, spacing: 3) {
-                        ForEach(Array(tools.enumerated()), id: \.offset) { _, t in
-                            HStack(spacing: 6) {
-                                Text("🛠 \(t.name)").font(.caption)
-                                if let s = t.status { Text(s).font(.caption2).foregroundStyle(statusColor(s)) }
-                            }
-                        }
-                    }
-                    .padding(.top, 2)
+            if message.isUser {
+                if let t = message.text, !t.isEmpty {
+                    MarkdownText(text: t).textSelection(.enabled)
                 }
-            }
-
-            if !reasoning.isEmpty {
-                ExpandableSection(title: "思考") {
-                    MarkdownText(text: reasoning).font(.caption).foregroundStyle(.secondary)
+            } else {
+                // 按 content 原始顺序渲染：思考出现在答案之前（与电脑端一致）
+                ForEach(Array((message.content ?? []).enumerated()), id: \.offset) { _, part in
+                    partView(part)
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func partView(_ part: Part) -> some View {
+        switch part.type {
+        case "reasoning":
+            if let t = part.text, !t.isEmpty {
+                ExpandableSection(title: "思考") {
+                    MarkdownText(text: t).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        case "text":
+            if let t = part.text, !t.isEmpty {
+                MarkdownText(text: t).textSelection(.enabled)
+            }
+        case "tool":
+            if let name = part.name, !name.isEmpty {
+                HStack(spacing: 6) {
+                    Text("🛠 \(name)").font(.caption).foregroundStyle(.secondary)
+                    if let s = part.state?.status { Text(s).font(.caption2).foregroundStyle(statusColor(s)) }
+                }
+            }
+        default:
+            EmptyView()
+        }
     }
 
     private func statusColor(_ s: String) -> Color {

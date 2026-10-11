@@ -32,7 +32,7 @@ export const config = {
   password,
   port: Number(env.POCKETD_PORT || 8788),
   appScheme: env.POCKET_URL_SCHEME || 'opencodepocket',
-  notifyIdle: String(env.NOTIFY_IDLE || '').toLowerCase() === 'true',
+  notifyIdle: String(env.NOTIFY_IDLE || 'true').toLowerCase() !== 'false',
   ntfy: {
     url: (env.NTFY_URL || 'https://ntfy.sh').replace(/\/+$/, ''),
     topic: env.NTFY_TOPIC || '',

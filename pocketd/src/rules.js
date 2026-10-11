@@ -1,13 +1,5 @@
 import { config } from './config.js';
 
-const PERMISSION_KEYS = [
-  'permission.title',
-  'permission.name',
-  'title',
-  'name',
-  'description',
-];
-
 function firstString(...vals) {
   for (const v of vals) {
     if (typeof v === 'string' && v.trim()) return v.trim();
@@ -16,27 +8,25 @@ function firstString(...vals) {
 }
 
 function describePermission(data = {}) {
-  const p = data.permission || {};
-  const explicit = firstString(
-    ...PERMISSION_KEYS.map((k) => k.split('.').reduce((o, key) => o?.[key], { permission: p, data })),
-  );
-  if (explicit) return explicit;
-  const cmd = p.metadata?.command || data.metadata?.command;
-  if (cmd) return Array.isArray(cmd) ? cmd.join(' ') : String(cmd);
-  return '某个操作正在等待你的授权';
+  const perm = firstString(data.permission, data.title, data.name);
+  const patterns = Array.isArray(data.patterns) ? data.patterns.slice(0, 3).join(', ') : '';
+  if (perm && patterns) return `${perm}\n${patterns}`;
+  return perm || '某个操作正在等待你的授权';
 }
 
-function describeQuestion(data = {}) {
-  const q = data.question || data;
-  const text = firstString(q.question, q.header, data.text);
-  const options = Array.isArray(q.options) ? q.options.map((o) => o?.label).filter(Boolean) : [];
-  if (text && options.length) return `${text}\n选项: ${options.join(' / ')}`;
-  return text || 'agent 正在等待你的回答';
+function describeForm(data = {}) {
+  const title = firstString(data.title, data.header, data.question);
+  const fields = Array.isArray(data.fields)
+    ? data.fields.map((f) => f?.title || f?.key).filter(Boolean).slice(0, 4).join(' / ')
+    : '';
+  if (title && fields) return `${title}\n${fields}`;
+  return title || fields || 'agent 正在等待你的回答';
 }
 
 /**
- * Decide whether an event should produce a notification.
- * Returns { key, notification } or null.
+ * 依据本版本(2.0.26)真实事件类型决定是否通知。
+ * 事件：permission.asked / form.created / question.* / session.execution.failed /
+ *       session.step.failed / session.error / session.idle
  */
 export function evaluate(event) {
   const type = event?.type || '';
@@ -44,62 +34,38 @@ export function evaluate(event) {
   const sessionID = data.sessionID || data.sessionId || event?.sessionID;
   const base = { sessionID, directory: event?.location?.directory, type };
 
-  // Approvals
-  if (/permission/i.test(type) && /ask|updated|request/i.test(type)) {
-    const rid = data.requestID || data.permissionID || data.id || data.permission?.id || sessionID;
+  // 审批
+  if (/permission/i.test(type) && /ask|request/i.test(type)) {
+    const rid = data.id || data.requestID || data.permissionID || sessionID;
     return {
       key: `permission:${rid}`,
-      notification: {
-        ...base,
-        title: '需要审批',
-        body: describePermission(data),
-        priority: 'high',
-        tags: ['lock', 'warning'],
-      },
+      notification: { ...base, title: '需要审批', body: describePermission(data), priority: 'high', tags: ['lock', 'warning'] },
     };
   }
 
-  // Questions
-  if (/question/i.test(type) && /ask|request/i.test(type)) {
-    const rid = data.requestID || data.id || data.question?.id || sessionID;
+  // 提问 / 表单（本版本 question 实现为 form.created）
+  if ((/form/i.test(type) && /created|ask/i.test(type)) || (/question/i.test(type) && /ask|request/i.test(type))) {
+    const rid = data.id || data.formID || data.requestID || sessionID;
     return {
-      key: `question:${rid}`,
-      notification: {
-        ...base,
-        title: '需要回答',
-        body: describeQuestion(data),
-        priority: 'high',
-        tags: ['question'],
-      },
+      key: `form:${rid}`,
+      notification: { ...base, title: '需要回答', body: describeForm(data), priority: 'high', tags: ['question'] },
     };
   }
 
-  // Errors
-  if (type === 'session.error') {
+  // 出错
+  if (type.includes('execution.failed') || type.includes('step.failed') || type === 'session.error') {
     const msg = firstString(data.error?.message, data.message, data.error?.name);
     return {
       key: `error:${sessionID}:${event.id || Date.now()}`,
-      notification: {
-        ...base,
-        title: '会话出错',
-        body: msg || 'session error',
-        priority: 'urgent',
-        tags: ['rotating_light'],
-      },
+      notification: { ...base, title: '会话出错', body: msg || 'session error', priority: 'urgent', tags: ['rotating_light'] },
     };
   }
 
-  // Idle (opt-in)
+  // 完成 / 空闲
   if (config.notifyIdle && type === 'session.idle') {
     return {
       key: `idle:${sessionID}:${data.idle ?? event.id ?? Date.now()}`,
-      notification: {
-        ...base,
-        title: '会话空闲',
-        body: '正在等待你的下一步',
-        priority: 'default',
-        tags: ['zzz'],
-      },
+      notification: { ...base, title: '会话完成', body: '已空闲，等待你的下一步', priority: 'default', tags: ['white_check_mark'] },
     };
   }
 
