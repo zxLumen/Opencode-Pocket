@@ -5,7 +5,10 @@ struct SessionListView: View {
     @State private var path: [String] = []
     @State private var showSettings = false
     @State private var search = ""
-    @State private var collapsed: Set<String> = []
+    @State private var collapsed: Set<String> = []        // 整个分区折叠
+    @State private var expandedGroups: Set<String> = []    // 分区内展开全部（默认只显示前 5）
+
+    private let previewLimit = 5
 
     private var filtered: [Session] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
@@ -18,13 +21,18 @@ struct SessionListView: View {
         }
     }
 
+    /// 组内按最近活跃(updated)倒序；组间也按"该组最近活跃"倒序。
     private var groups: [(String, [Session])] {
         Dictionary(grouping: filtered, by: { $0.projectName })
-            .map { (key, value) in
-                (key, value.sorted { ($0.time?.updated ?? 0) > ($1.time?.updated ?? 0) })
+            .map { (name, list) -> (String, [Session], Double) in
+                let sorted = list.sorted { ($0.time?.updated ?? 0) > ($1.time?.updated ?? 0) }
+                return (name, sorted, sorted.first?.time?.updated ?? 0)
             }
-            .sorted { $0.0.localizedCaseInsensitiveCompare($1.0) == .orderedAscending }
+            .sorted { $0.2 > $1.2 }
+            .map { ($0.0, $0.1) }
     }
+
+    private var isSearching: Bool { !search.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -45,13 +53,26 @@ struct SessionListView: View {
                 ForEach(groups, id: \.0) { name, sessions in
                     Section {
                         if !collapsed.contains(name) {
-                            ForEach(sessions) { session in
+                            let showAll = expandedGroups.contains(name) || isSearching
+                            let visible = showAll ? sessions : Array(sessions.prefix(previewLimit))
+
+                            ForEach(visible) { session in
                                 Button { path.append(session.id) } label: { SessionRow(session: session) }
                                     .buttonStyle(.plain)
                             }
+
+                            if !isSearching && sessions.count > previewLimit {
+                                if expandedGroups.contains(name) {
+                                    Button("收起") { expandedGroups.remove(name) }
+                                        .font(.caption).foregroundStyle(.secondary)
+                                } else {
+                                    Button("展开其余 \(sessions.count - previewLimit) 个") { expandedGroups.insert(name) }
+                                        .font(.caption)
+                                }
+                            }
                         }
                     } header: {
-                        Button { toggle(name) } label: {
+                        Button { toggleCollapse(name) } label: {
                             HStack(spacing: 6) {
                                 Image(systemName: collapsed.contains(name) ? "chevron.right" : "chevron.down")
                                     .font(.caption2).foregroundStyle(.secondary)
@@ -94,7 +115,7 @@ struct SessionListView: View {
         }
     }
 
-    private func toggle(_ name: String) {
+    private func toggleCollapse(_ name: String) {
         if collapsed.contains(name) { collapsed.remove(name) } else { collapsed.insert(name) }
     }
 
