@@ -19,10 +19,12 @@ export class SessionCache {
         const next = new Map();
         for (const s of list) {
           if (!s?.id) continue;
+          const dir = s.location?.directory || s.directory;
+          const dirName = dir ? dir.split('/').filter(Boolean).pop() : '';
           next.set(s.id, {
             id: s.id,
-            title: s.title || s.slug || s.id,
-            directory: s.location?.directory || s.directory,
+            title: s.title || s.slug || dirName || '未命名会话',
+            directory: dir,
             agent: s.agent,
             model: s.model?.id,
           });
@@ -51,10 +53,12 @@ export class SessionCache {
       const res = await this.client.getJSON(`/api/session/${encodeURIComponent(id)}`);
       const s = res?.data ?? res;
       if (s?.id) {
+        const dir = s.location?.directory || s.directory;
+        const dirName = dir ? dir.split('/').filter(Boolean).pop() : '';
         const info = {
           id: s.id,
-          title: s.title || s.slug || s.id,
-          directory: s.location?.directory || s.directory,
+          title: s.title || s.slug || dirName || '未命名会话',
+          directory: dir,
         };
         this.byId.set(s.id, info);
         return info;
