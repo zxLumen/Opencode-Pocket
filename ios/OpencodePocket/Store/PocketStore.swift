@@ -14,6 +14,7 @@ private struct PermissionItemDTO: Decodable {
     var sessionID: String?
     var action: String?
     var resources: [String]?
+    var message: String?
 }
 private struct QuestionItemDTO: Decodable {
     var id: String
@@ -38,6 +39,7 @@ final class PocketStore {
     var liveText: [String: String] = [:]
     var lastError: String?
     var serverVersion: String?
+    var refreshTick = 0
 
     // Connection form fields
     static let defaultServerURL = "https://pocket.example.com"
@@ -113,7 +115,7 @@ final class PocketStore {
 
     func loadPending() async {
         guard let c = try? client() else { return }
-        if let raw = try? await c.getRawJSON("/api/permission") {
+        if let raw = try? await c.getRawJSON("/api/permission/request") {
             let items = Self.array(from: raw).compactMap { try? JSONDecoder().decode(PermissionItemDTO.self, from: JSONSerialization.data(withJSONObject: $0)) }
             pendingPermissions = items.map {
                 PendingPermission(
@@ -121,15 +123,14 @@ final class PocketStore {
                     sessionID: $0.sessionID,
                     action: $0.action,
                     resources: $0.resources ?? [],
-                    title: Self.permissionTitle($0),
+                    title: $0.message ?? Self.permissionTitle($0),
                     createdAt: nil
                 )
             }
         }
-        if let raw = try? await c.getRawJSON("/api/question") {
-            let items = Self.array(from: raw).compactMap { try? JSONDecoder().decode(QuestionItemDTO.self, from: JSONSerialization.data(withJSONObject: $0)) }
-            pendingQuestions = items.map { PendingQuestion(id: $0.id, sessionID: $0.sessionID, questions: $0.questions ?? []) }
-        }
+        // 说明：当前 opencode 版本(2.0.26)的 HTTP API 未暴露 question 接口，
+        // 因此 pendingQuestions 暂时恒为空。
+        pendingQuestions = []
     }
 
     func loadMessages(sessionID: String) async -> [Message] {
@@ -172,7 +173,11 @@ final class PocketStore {
         if type.hasPrefix("session.") {
             switch type {
             case "session.idle":
-                if let sid = event.sessionID { activeIDs.remove(sid) }
+                if let sid = event.sessionID {
+                    activeIDs.remove(sid)
+                    liveText[sid] = ""
+                }
+                refreshTick += 1
                 Task { await loadSessions() }
             case "session.created", "session.updated", "session.deleted":
                 Task { await loadSessions() }
@@ -188,8 +193,12 @@ final class PocketStore {
 
     func sendPrompt(sessionID: String, text: String) async {
         guard let c = try? client(), !text.isEmpty else { return }
-        do { try await c.postJSON("/api/session/\(sessionID)/prompt", json: ["prompt": ["text": text]]) }
-        catch { lastError = error.localizedDescription }
+        do {
+            try await c.postJSON("/api/session/\(sessionID)/prompt", json: ["text": text])
+            refreshTick += 1
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     func interrupt(sessionID: String) async {
@@ -202,7 +211,7 @@ final class PocketStore {
     func replyPermission(_ p: PendingPermission, reply: String) async {
         guard let c = try? client(), let sid = p.sessionID else { return }
         do {
-            try await c.postJSON("/api/session/\(sid)/permission/\(p.id)/reply", json: ["reply": reply])
+            try await c.postJSON("/api/session/\(sid)/permission/\(p.id)/reply", json: ["decision": reply])
             await loadPending()
         } catch { lastError = error.localizedDescription }
     }

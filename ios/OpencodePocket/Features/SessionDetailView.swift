@@ -26,6 +26,11 @@ struct SessionDetailView: View {
                     LazyVStack(alignment: .leading, spacing: 14) {
                         header
 
+                        if let err = store.lastError, !err.isEmpty {
+                            Label(err, systemImage: "exclamationmark.triangle")
+                                .font(.caption).foregroundStyle(.red)
+                        }
+
                         ForEach(permissions) { PermissionCard(permission: $0) }
                         ForEach(questions) { QuestionCard(question: $0) }
 
@@ -66,6 +71,9 @@ struct SessionDetailView: View {
                 }
                 .onChange(of: messages.count) { _, _ in if follow { scrollToBottom(proxy) } }
                 .onChange(of: live) { _, _ in if follow { scrollToBottom(proxy) } }
+                .onChange(of: store.refreshTick) { _, _ in
+                    Task { await reload(); if follow { scrollToBottom(proxy) } }
+                }
                 .task { await reload(); await MainActor.run { scrollToBottom(proxy, animated: false) } }
                 .refreshable { await reload() }
             }
