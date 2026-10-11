@@ -15,6 +15,8 @@ while true; do
   echo "[tunnel] $(date '+%F %T') connecting $VPS_USER@$VPS_HOST -R $PORT:127.0.0.1:$PORT"
   ssh -N \
     -p "$SSH_PORT" \
+    -o ControlMaster=no \
+    -o ControlPath=none \
     -o ServerAliveInterval=30 \
     -o ServerAliveCountMax=3 \
     -o ExitOnForwardFailure=yes \
