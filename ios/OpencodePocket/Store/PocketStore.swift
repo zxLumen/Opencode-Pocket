@@ -332,7 +332,7 @@ final class PocketStore {
 
     func sendPrompt(sessionID: String, text: String, attachments: [Attachment] = []) async {
         guard let c = try? client() else { return }
-        guard !text.isEmpty || !attachments.isEmpty else { return }
+        // 允许空文本/空附件：ComposerView 会把纯空白输入转成「继续」；服务端也接受空 text。
         do {
             var body: [String: Any] = ["text": text]
             if !attachments.isEmpty {

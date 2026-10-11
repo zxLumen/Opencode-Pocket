@@ -12,8 +12,9 @@ struct ComposerView: View {
     @State private var lastTranscript = ""
     @State private var uploading = false
 
+    /// 始终可发送（上传中除外）：空消息会在 send() 里变成「继续」。
     private var canSend: Bool {
-        !uploading && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+        !uploading
     }
 
     var body: some View {
@@ -120,8 +121,10 @@ struct ComposerView: View {
     }
 
     private func send() {
-        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend else { return }
+        // 空消息（只有空白、且没有附件）→ 发「继续」，让 agent 接着做。
+        let value = (trimmed.isEmpty && attachments.isEmpty) ? "继续" : trimmed
         let files = attachments
         text = ""
         attachments = []
