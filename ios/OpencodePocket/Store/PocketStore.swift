@@ -62,6 +62,7 @@ final class PocketStore {
     var sessionErrors: [String: String] = [:]
     var lastError: String?
     var serverVersion: String?
+    var offline = false
     var refreshTick = 0
 
     // 收藏 / 已读 / 消息缓存
@@ -81,6 +82,7 @@ final class PocketStore {
 
     private var eventTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
     private var pollTick = 0
 
     // MARK: - Connection
@@ -100,20 +102,67 @@ final class PocketStore {
             Credentials.baseURL = baseURL
             Credentials.username = username
             phase = .connected
+            offline = false
+            reconnectTask?.cancel(); reconnectTask = nil
             await refreshAll()
             startEvents()
             startPolling()
         } catch {
-            phase = .failed(error.localizedDescription)
-            lastError = error.localizedDescription
+            let msg = Self.friendly(error)
+            phase = .failed(msg)
+            lastError = msg
+        }
+    }
+
+    // MARK: - 离线判定 / 自动重连
+
+    private static func isNetwork(_ error: Error) -> Bool {
+        guard let u = error as? URLError else { return false }
+        switch u.code {
+        case .networkConnectionLost, .notConnectedToInternet, .timedOut,
+             .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed, .secureConnectionFailed:
+            return true
+        default:
+            return false
+        }
+    }
+
+    static func friendly(_ error: Error) -> String {
+        if isNetwork(error) { return "连接中断：Mac 可能已休眠/离线，或网络不可用。正在自动重连…" }
+        return error.localizedDescription
+    }
+
+    private func markOfflineIfNetwork(_ error: Error) {
+        if Self.isNetwork(error) {
+            offline = true
+            startReconnect()
+        }
+    }
+
+    private func startReconnect() {
+        guard reconnectTask == nil else { return }
+        reconnectTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self else { return }
+                if let c = try? self.client(),
+                   (try? await c.getData("/api/info", as: ServerInfo.self)) != nil {
+                    self.offline = false
+                    self.lastError = nil
+                    self.startEvents()
+                    self.startPolling()
+                    await self.refreshAll()
+                    self.reconnectTask = nil
+                    return
+                }
+            }
         }
     }
 
     func disconnect() {
-        eventTask?.cancel()
-        eventTask = nil
-        pollTask?.cancel()
-        pollTask = nil
+        eventTask?.cancel(); eventTask = nil
+        pollTask?.cancel(); pollTask = nil
+        reconnectTask?.cancel(); reconnectTask = nil
         phase = .disconnected
     }
 
@@ -137,7 +186,8 @@ final class PocketStore {
                 changed = true
             }
             if changed { Prefs.viewed = lastViewedAt }
-        } catch { lastError = error.localizedDescription }
+            offline = false
+        } catch { markOfflineIfNetwork(error) }
         await loadActive()
     }
 
@@ -146,7 +196,8 @@ final class PocketStore {
         do {
             let map = try await c.getData("/api/session/active", as: [String: ActiveStatus].self)
             activeIDs = Set(map.compactMap { $0.value.type == "running" ? $0.key : nil })
-        } catch { /* ignore */ }
+            offline = false
+        } catch { markOfflineIfNetwork(error) }
     }
 
     func loadAgents() async {
@@ -196,6 +247,7 @@ final class PocketStore {
             let r = try await c.getData("/api/session/\(sessionID)/message", query: q, as: MessagesResponse.self)
             return (r.data, r.cursor?.previous)
         } catch {
+            markOfflineIfNetwork(error)
             return ([], nil)
         }
     }

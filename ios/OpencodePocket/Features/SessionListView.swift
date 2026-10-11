@@ -43,6 +43,13 @@ struct SessionListView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
+                if store.offline {
+                    Section {
+                        Label("已离线（Mac 可能休眠/离线），正在自动重连…", systemImage: "wifi.slash")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                }
+
                 if !store.pendingPermissions.isEmpty || !store.pendingQuestions.isEmpty || !store.pendingForms.isEmpty {
                     Section("待处理") {
                         ForEach(store.pendingPermissions) { p in
