@@ -9,7 +9,7 @@ struct ServerInfo: Codable, Sendable {
 
 struct ActiveStatus: Codable, Sendable { var type: String? }
 
-enum DotState { case pending, running, done, idle }
+enum DotState { case pending, running, failed, done, idle }
 
 /// 轻量本地持久化（收藏 / 已读时间）。
 enum Prefs {
@@ -59,6 +59,7 @@ final class PocketStore {
     var pendingForms: [FormInfo] = []
     var liveText: [String: String] = [:]
     var liveReasoning: [String: String] = [:]
+    var sessionErrors: [String: String] = [:]
     var lastError: String?
     var serverVersion: String?
     var refreshTick = 0
@@ -250,21 +251,28 @@ final class PocketStore {
             return
         }
 
+        // 执行失败 / 出错：记录错误，供会话内红字提示
+        if type.contains("execution.failed") || type.contains("step.failed") || type == "session.error" {
+            if let sid { sessionErrors[sid] = event.errorMessage ?? "执行失败" }
+        }
+
         guard type.hasPrefix("session.") || type.hasPrefix("message.") else { return }
         switch type {
-        case "session.idle", "session.execution.failed", "session.execution.completed":
-            if let sid { activeIDs.remove(sid); liveText[sid] = ""; liveReasoning[sid] = "" }
+        case "session.idle", "session.execution.succeeded", "session.execution.failed":
+            if let sid {
+                activeIDs.remove(sid)
+                liveText[sid] = ""
+                liveReasoning[sid] = ""
+            }
             refreshTick += 1
             Task { await loadSessions(); await loadPending() }
+        case "session.execution.started", "session.step.started":
+            if let sid { activeIDs.insert(sid); sessionErrors[sid] = nil }
+            Task { await loadActive() }
         case "session.created", "session.updated", "session.deleted", "session.status":
             Task { await loadSessions() }
-        case "session.execution.started", "session.step.started", "session.status":
-            if let sid { activeIDs.insert(sid) }
-            Task { await loadActive() }
-        case "session.error":
-            Task { await refreshAll() }
         default:
-            if let sid, type.contains("tool") { activeIDs.insert(sid) }
+            break
         }
     }
 
@@ -279,6 +287,7 @@ final class PocketStore {
                 body["files"] = attachments.map { ["uri": $0.uri, "name": $0.name] }
             }
             try await c.postJSON("/api/session/\(sessionID)/prompt", json: body)
+            sessionErrors[sessionID] = nil   // 新的指令，清掉上次错误
             refreshTick += 1
         } catch {
             lastError = error.localizedDescription
@@ -315,10 +324,24 @@ final class PocketStore {
         return out
     }
 
-    func createSession(directory: String, agent: String?) async -> String? {
+    var suggestedModel: ModelRef? {
+        var counts: [String: (ModelRef, Int)] = [:]
+        for s in sessions {
+            guard let m = s.model else { continue }
+            counts[m.label] = (m, (counts[m.label]?.1 ?? 0) + 1)
+        }
+        return counts.values.max { $0.1 < $1.1 }?.0
+    }
+
+    func createSession(directory: String, agent: String?, model: ModelRef?) async -> String? {
         guard let c = try? client(), !directory.isEmpty else { return nil }
         var body: [String: Any] = ["location": ["directory": directory]]
         if let agent, !agent.isEmpty { body["agent"] = agent }
+        if let model {
+            var m: [String: Any] = ["id": model.id, "providerID": model.providerID]
+            if let v = model.variant { m["variant"] = v }
+            body["model"] = m
+        }
         do {
             let data = try await c.request("/api/session", method: "POST", json: body)
             let obj = try JSONSerialization.jsonObject(with: data)
@@ -424,10 +447,11 @@ final class PocketStore {
         (s.time?.updated ?? 0) > (lastViewedAt[s.id] ?? 0)
     }
 
-    /// 优先级：待办 > 运行中 > 未读完成 > 已读
+    /// 优先级：待办 > 运行中 > 失败 > 未读完成 > 已读
     func dotState(for s: Session) -> DotState {
         if pendingCount(for: s.id) > 0 { return .pending }
         if activeIDs.contains(s.id) { return .running }
+        if sessionErrors[s.id] != nil || s.outcome == "failed" { return .failed }
         if isUnread(s) { return .done }
         return .idle
     }

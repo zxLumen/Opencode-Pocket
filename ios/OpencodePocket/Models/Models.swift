@@ -147,10 +147,11 @@ struct OpenCodeEvent: Decodable, Sendable {
     var delta: String?
     var text: String?
     var action: String?
+    var errorMessage: String?
 
     private enum Keys: String, CodingKey {
         case id, type, location, data
-        case directory, sessionID, delta, text, action
+        case directory, sessionID, delta, text, action, error, message
     }
     private struct Loc: Decodable { var directory: String? }
 
@@ -165,6 +166,9 @@ struct OpenCodeEvent: Decodable, Sendable {
             delta = try? data.decodeIfPresent(String.self, forKey: .delta)
             text = try? data.decodeIfPresent(String.self, forKey: .text)
             action = try? data.decodeIfPresent(String.self, forKey: .action)
+            if let err = try? data.nestedContainer(keyedBy: Keys.self, forKey: .error) {
+                errorMessage = try? err.decodeIfPresent(String.self, forKey: .message)
+            }
         }
     }
 }

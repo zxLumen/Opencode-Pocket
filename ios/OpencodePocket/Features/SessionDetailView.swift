@@ -85,6 +85,14 @@ struct SessionDetailView: View {
 
                         header
 
+                        if let err = store.sessionErrors[sessionID], !err.isEmpty {
+                            Label(err, systemImage: "exclamationmark.octagon")
+                                .font(.caption).foregroundStyle(.red)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                        }
+
                         if let err = store.lastError, !err.isEmpty {
                             Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
                         }
@@ -207,7 +215,7 @@ struct SessionDetailView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Circle().fill(isRunning ? Color.yellow : Color.secondary.opacity(0.4)).frame(width: 9, height: 9)
+                Circle().fill(isRunning ? Color.yellow : (store.sessionErrors[sessionID] != nil ? Color.red : Color.secondary.opacity(0.4))).frame(width: 9, height: 9)
                 Text(isRunning ? "运行中" : "空闲").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if let cost = session?.cost, cost > 0 {

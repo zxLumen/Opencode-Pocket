@@ -171,6 +171,7 @@ struct SessionRow: View {
         switch state {
         case .pending: return .orange
         case .running: return .yellow
+        case .failed: return .red
         case .done: return .green
         case .idle: return Color.secondary.opacity(0.4)
         }

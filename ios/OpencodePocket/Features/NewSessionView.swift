@@ -7,7 +7,11 @@ struct NewSessionView: View {
 
     @State private var directory = ""
     @State private var agent = ""
+    @State private var modelLabel = ""
     @State private var busy = false
+
+    private var models: [ModelRef] { store.distinctModels }
+    private var selectedModel: ModelRef? { models.first { $0.label == modelLabel } }
 
     var body: some View {
         NavigationStack {
@@ -35,6 +39,13 @@ struct NewSessionView: View {
                     }
                 }
 
+                Section("模型") {
+                    Picker("模型", selection: $modelLabel) {
+                        Text("默认").tag("")
+                        ForEach(models, id: \.label) { m in Text(m.label).tag(m.label) }
+                    }
+                }
+
                 Section {
                     Button {
                         create()
@@ -55,6 +66,7 @@ struct NewSessionView: View {
             }
             .onAppear {
                 if directory.isEmpty { directory = store.knownDirectories.first ?? "" }
+                if modelLabel.isEmpty { modelLabel = store.suggestedModel?.label ?? "" }
             }
         }
     }
@@ -62,7 +74,9 @@ struct NewSessionView: View {
     private func create() {
         busy = true
         Task {
-            let id = await store.createSession(directory: directory, agent: agent.isEmpty ? nil : agent)
+            let id = await store.createSession(directory: directory,
+                                               agent: agent.isEmpty ? nil : agent,
+                                               model: selectedModel)
             busy = false
             if let id {
                 onCreated(id)
