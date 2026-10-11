@@ -306,34 +306,38 @@ final class PocketStore {
 
     func replyPermission(_ p: PendingPermission, reply: String) async {
         guard let c = try? client(), let sid = p.sessionID else { return }
+        pendingPermissions.removeAll { $0.id == p.id }   // 乐观移除
         do {
             try await c.postJSON("/api/session/\(sid)/permission/\(p.id)/reply", json: ["decision": reply])
-            await loadPending()
         } catch { lastError = error.localizedDescription }
+        await loadPending()
     }
 
     func replyQuestion(_ q: PendingQuestion, answers: [[String]]) async {
         guard let c = try? client(), let sid = q.sessionID else { return }
+        pendingQuestions.removeAll { $0.id == q.id }   // 乐观移除
         do {
             try await c.postJSON("/api/session/\(sid)/question/\(q.id)/reply", json: ["answers": answers])
-            await loadPending()
         } catch { lastError = error.localizedDescription }
+        await loadPending()
     }
 
     func rejectQuestion(_ q: PendingQuestion) async {
         guard let c = try? client(), let sid = q.sessionID else { return }
+        pendingQuestions.removeAll { $0.id == q.id }   // 乐观移除
         do {
             try await c.postJSON("/api/session/\(sid)/question/\(q.id)/reject")
-            await loadPending()
         } catch { lastError = error.localizedDescription }
+        await loadPending()
     }
 
     func replyForm(_ form: FormInfo, answer: [String: Any]) async {
         guard let c = try? client() else { return }
+        pendingForms.removeAll { $0.id == form.id }   // 乐观移除，避免卡片滞留
         do {
             try await c.postJSON("/api/session/\(form.sessionID)/form/\(form.id)/reply", json: ["answer": answer])
-            await loadPending()
         } catch { lastError = error.localizedDescription }
+        await loadPending()
     }
 
     func switchAgent(sessionID: String, agent: String) async {
