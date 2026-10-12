@@ -159,6 +159,8 @@ docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容�
   高亮；选择存 `localStorage`（键 `zx-sandbox-agent`，默认 **Plan**）；进入会话时**按需
   同步**（先 `GET /api/session/<id>` 读服务端 agent，与本地期望不一致才 POST，避免每次
   进入都产生无谓的 `agent-switched` 事件）；React 重渲染后由 MutationObserver 自动重建按钮。
+  **SPA 自带的 `Choose agent` 下拉已被 CSS 隐藏**（`button[aria-label="Choose agent"]`）——
+  它列出的也正好是 `build`/`plan`（与自制按钮重复），隐藏后只保留一个入口。
 - **历史消息**：会话外壳注入 CSS 隐藏 `[data-slot=user-message-meta]` 与
   `[data-slot=text-part-meta]`（模型名与时长同在一个文本节点，整行隐藏最稳）。
 - **思考摘要默认开启**：外壳在 SPA 启动前把 `localStorage['settings.v3']`（SPA 设置存储的裸键）
