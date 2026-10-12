@@ -11,6 +11,7 @@ struct ComposerView: View {
     @State private var speech = SpeechRecognizer()
     @State private var lastTranscript = ""
     @State private var uploading = false
+    @State private var uploadError: String?
 
     /// 任何情况都能发送（上传中除外）：空消息会在 send() 里变成「继续」。
     private var canSend: Bool {
@@ -45,7 +46,17 @@ struct ComposerView: View {
                 }
             }
 
-            if let e = speech.errorText, !e.isEmpty {
+            if let e = uploadError, !e.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "photo.badge.exclamationmark")
+                    Text("图片上传失败：\(e)")
+                    Spacer()
+                    Button { uploadError = nil } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(.plain)
+                }
+                .font(.caption).foregroundStyle(.orange)
+                .padding(.horizontal, 14)
+            } else if let e = speech.errorText, !e.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle")
                     Text(e)
@@ -140,16 +151,22 @@ struct ComposerView: View {
     private func handlePhotos(_ items: [PhotosPickerItem]) async {
         guard !items.isEmpty else { return }
         uploading = true
+        uploadError = nil
         defer { uploading = false; photoItems = [] }
         var index = 0
         for item in items {
             index += 1
             guard let data = try? await item.loadTransferable(type: Data.self),
                   let image = UIImage(data: data),
-                  let jpeg = image.jpegData(compressionQuality: 0.8) else { continue }
+                  let jpeg = image.jpegData(compressionQuality: 0.8) else {
+                uploadError = "有图片读取失败（格式不支持？）"
+                continue
+            }
             let name = "photo-\(Int(Date().timeIntervalSince1970))-\(index).jpg"
             if let att = await store.uploadImage(jpeg, contentType: "image/jpeg", name: name) {
                 attachments.append(att)
+            } else {
+                uploadError = store.lastError ?? "服务器返回失败"
             }
         }
     }

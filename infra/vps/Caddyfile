@@ -20,9 +20,16 @@ pocket.{$DOMAIN} {
 		Content-Security-Policy "frame-ancestors 'self' https://{$DOMAIN}"
 		-Server
 	}
-	reverse_proxy host.docker.internal:4096 {
-		# SSE（/api/event）必须关闭缓冲
-		flush_interval -1
+	# App 的图片上传中继：/pocketd/upload -> pocketd(8788)/upload
+	handle /pocketd/* {
+		uri strip_prefix /pocketd
+		reverse_proxy host.docker.internal:8788
+	}
+	handle {
+		reverse_proxy host.docker.internal:4096 {
+			# SSE（/api/event）必须关闭缓冲
+			flush_interval -1
+		}
 	}
 }
 

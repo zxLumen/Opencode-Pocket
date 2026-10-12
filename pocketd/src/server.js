@@ -90,6 +90,6 @@ export function startServer({ port, tokens }) {
   });
 
   server.on('error', (err) => log.error(`pocketd http server error: ${err.message}`));
-  server.listen(port, '127.0.0.1', () => log.info(`pocketd http listening on 127.0.0.1:${port}`));
+  server.listen(port, '0.0.0.0', () => log.info(`pocketd http listening on 0.0.0.0:${port}`));
   return server;
 }
