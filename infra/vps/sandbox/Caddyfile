@@ -168,19 +168,26 @@
 			<script>
 			(function(){
 			var S=JSON.stringify(location.pathname.replace(/\/+$/,""));
-			var SEL="header,aside,[data-slot=user-message-meta],[data-slot=text-part-meta],button:has(svg[data-component=provider-icon]),button[data-action=prompt-model]";
+			var SEL="header,aside,[data-slot=user-message-meta],[data-slot=text-part-meta],button[data-action=prompt-model]";
+			var SEL_CSS=SEL+",button:has(svg[data-component=provider-icon])";
 			var code="(function(){var S="+S+";"+
 			"var AG='zx-sandbox-agent';"+
 			"var SEL="+JSON.stringify(SEL)+";"+
-			"function hide(){try{var e=document.querySelectorAll(SEL);for(var i=0;i<e.length;i++)e[i].style.setProperty('display','none','important');}catch(err){}}"+
+			"function hideNow(n){try{var e=n.querySelectorAll(SEL);for(var i=0;i<e.length;i++)e[i].style.setProperty('display','none','important');}catch(err){}}"+
+			"function hideAll(){try{var e=document.querySelectorAll(SEL);for(var i=0;i<e.length;i++)e[i].style.setProperty('display','none','important');}catch(err){}}"+
 			"function ag(){try{var m=document.querySelector('button[data-action=\"prompt-model\"]');if(!m||!m.parentElement)return;var host=m.parentElement,cur=localStorage.getItem(AG)||'plan',bar=document.querySelector('[data-zx-ag]');if(bar&&bar.dataset.v===cur)return;if(!bar){bar=document.createElement('div');bar.setAttribute('data-zx-ag','1');host.appendChild(bar);}bar.dataset.v=cur;bar.textContent='';['plan','build'].forEach(function(a){var b=document.createElement('button');b.textContent=a==='plan'?'Plan':'Build';if(a===cur)b.className='on';b.addEventListener('click',function(){try{fetch('/api/session/ses_guest/agent',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent:a})});}catch(err){}localStorage.setItem(AG,a);bar.dataset.v='';ag();});bar.appendChild(b);});}catch(err){}}"+
 			"function guard(){var p=location.pathname;if((p==='/'||p==='/global'||p==='/global/')&&S)location.replace(S);}"+
-			"function run(){hide();ag();}"+
-			"new MutationObserver(run).observe(document.documentElement,{childList:true,subtree:true});"+
-			"document.addEventListener('DOMContentLoaded',run);try{fetch('/api/session/ses_guest/agent',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent:localStorage.getItem(AG)||'plan'})});}catch(err){}run();guard();setInterval(guard,800);"+
+			"function syncAgent(){var want=localStorage.getItem(AG)||'plan';try{fetch('/api/session/ses_guest',{headers:{'Accept':'application/json'}}).then(function(r){return r.json();}).then(function(d){var cur=d&&d.data&&d.data.agent;if(cur&&cur!==want)return fetch('/api/session/ses_guest/agent',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent:want})}).catch(function(){});}).catch(function(){});}catch(err){}}"+
+			"var q=[],sched=false;"+
+			"function flush(){sched=false;var l=q;q=[];for(var i=0;i<l.length;i++)hideNow(l[i]);ag();}"+
+			"function onMut(recs){var dirty=false;for(var i=0;i<recs.length;i++){var r=recs[i];if(r.type!=='childList')continue;dirty=true;for(var j=0;j<r.addedNodes.length;j++){var a=r.addedNodes[j];if(a.nodeType===1)q.push(a);}}if(dirty&&!sched){sched=true;requestAnimationFrame(flush);}}"+
+			"function run(){hideAll();ag();}"+
+			"new MutationObserver(onMut).observe(document.documentElement,{childList:true,subtree:true});"+
+			"document.addEventListener('DOMContentLoaded',function(){run();syncAgent();});run();guard();setInterval(guard,800);"+
 			"document.addEventListener('keydown',function(ev){if(!(ev.metaKey||ev.ctrlKey))return;var k=(ev.key||'').toLowerCase();if(k==='k'||k==='n'||k===','||k==='p')ev.preventDefault();},true);"+
 			"})();";
-			var inject="<style>"+SEL+"{display:none!important}"+
+			var inject="<style>"+SEL_CSS+"{display:none!important}"+
+			"[class*=\"md:max-w-200\"],[class*=\"2xl:max-w-[1000px]\"]{max-width:none!important}"+
 			"[data-zx-ag]{display:inline-flex;gap:4px;margin:0 2px;padding:2px;align-items:center}"+
 			"[data-zx-ag] button{font:12px/1.2 system-ui;color:inherit;background:transparent;border:1px solid rgba(128,128,128,.4);border-radius:999px;padding:2px 10px;cursor:pointer}"+
 			"[data-zx-ag] button.on{background:#3574f0;border-color:#3574f0;color:#fff}"+
@@ -221,6 +228,16 @@
 		}
 		handle {
 			respond 403
+		}
+	}
+
+	# ⑧ 静态资源长缓存:SPA bundle 文件名带内容哈希(如 index-BkjnPp3h.js),
+	#    可安全 immutable 缓存一年,访客二次进入不再下载 2.7MB
+	@assets path_regexp ^/assets/.+\.(js|css|woff2?|png|jpe?g|webp|avif|gif|svg|ico)$
+	handle @assets {
+		header Cache-Control "public, max-age=31536000, immutable"
+		reverse_proxy opencode-play:4096 {
+			flush_interval -1
 		}
 	}
 

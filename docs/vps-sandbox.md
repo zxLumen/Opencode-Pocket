@@ -107,9 +107,22 @@ docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容�
 7. **写入白名单**：只放行 `^/session/<id>/` 下的对话操作，以及
    `POST /api/session/<id>/agent`（Plan/Build 切换）；其它一律 `403`。
 8. 会话 id 由 `PLAYGROUND_SESSION_ID` 注入（默认 `ses_guest`）。
+9. **静态资源长缓存**：`GET /assets/*.{js,css,woff2,图片}` —— bundle 文件名带内容哈希
+   （如 `index-BkjnPp3h.js`），可安全 `Cache-Control: public, max-age=31536000, immutable`
+   一年；否则访客每次进入都要重下约 2.7MB 的 SPA bundle（进入慢的主因之一）。
 
 自建外壳通过隐藏 `header` / 拦截 `popstate`、`pushState` 等守卫，把访客钉在固定会话内；
 手机端右侧 `Session | Changes` 面板**保留**。
+
+外壳注入脚本的性能约定（避免拖慢 SPA 消息渲染）：
+
+- **隐藏用 CSS 兜底 + JS 增量**：隐藏规则由注入 `<style>` 先兜底（`!important`），JS 只在
+  初始与新增 DOM 子树上补防内联覆盖，且经 `requestAnimationFrame` 节流合并 —— 不在每次
+  React mutation 时全量重扫整棵 DOM（否则消息流渲染会产生上百毫秒长任务，表现为「会话
+  出来慢 / 打字卡」）；JS 选择器刻意不含昂贵的 `button:has()`（该规则只留在 CSS 侧）。
+- **宽会话栏铺满**：SPA 聊天区默认 `max-width: 800px(2xl 1000px)` 居中，宽屏/把分栏拖宽后
+  两侧留大片空白；外壳注入 CSS 覆盖 `[class*="md:max-w-200"]` 等为 `max-width: none`，
+  让消息列与输入框铺满整个会话栏。
 
 ## 访客工作台（`hub.html` + `static-server.mjs`）
 
@@ -132,8 +145,9 @@ docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容�
 - **写**：`POST/(api/)session/<id>/model` → 403（与 pty/shell/tui 同级封禁）。
 - **Plan / Build 切换**：会话外壳在输入工具条注入「Plan | Build」自制按钮 —— 点击发
   `POST /api/session/<id>/agent`（`@write` 白名单里唯一额外放行的写接口），当前模式
-  高亮；选择存 `localStorage`（键 `zx-sandbox-agent`，默认 **Plan**），每次进入会话按该
-  值幂等同步一次服务端；React 重渲染后由 MutationObserver 自动重建按钮。
+  高亮；选择存 `localStorage`（键 `zx-sandbox-agent`，默认 **Plan**）；进入会话时**按需
+  同步**（先 `GET /api/session/<id>` 读服务端 agent，与本地期望不一致才 POST，避免每次
+  进入都产生无谓的 `agent-switched` 事件）；React 重渲染后由 MutationObserver 自动重建按钮。
 - **历史消息**：会话外壳注入 CSS 隐藏 `[data-slot=user-message-meta]` 与
   `[data-slot=text-part-meta]`（模型名与时长同在一个文本节点，整行隐藏最稳）。
 - **键盘捷径**：拦截 `Ctrl/Cmd + k / n / , / p`（防止唤起模型选择等浮动面板）。
