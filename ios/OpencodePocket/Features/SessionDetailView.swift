@@ -51,7 +51,7 @@ struct SessionDetailView: View {
     @State private var loadingOlder = false
     @State private var didInitialScroll = false
     @State private var showModels = false
-    @State private var bottomVisibleID: String?
+    @State private var rowFrames: [String: CGRect] = [:]
 
     // 偏移量 + 高度，用于精确判定"是否在底部"（iOS17 可用）
     @State private var topMinY: CGFloat = 0
@@ -161,15 +161,14 @@ struct SessionDetailView: View {
                 .onPreferenceChange(ContentHKey.self) { contentHeight = $0 }
                 .onPreferenceChange(ViewHKey.self) { viewportHeight = $0 }
                 .onPreferenceChange(RowFrameKey.self) { frames in
-                    // 视口内"最靠底部"的那条（= 输入框正上方那一行）
-                    let visible = frames.filter { $0.value.maxY > 0 && $0.value.minY < viewportHeight }
-                    bottomVisibleID = visible.max { $0.value.minY < $1.value.minY }?.key
+                    rowFrames = frames
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                    reanchorBottomVisible(proxy)
+                    // 立即用"变化前"的 rowFrames 计算输入框上方那一行
+                    if let id = bottomAnchorID() { reanchor(proxy, id) }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                    reanchorBottomVisible(proxy)
+                    if let id = bottomAnchorID() { reanchor(proxy, id) }
                 }
                 .onPreferenceChange(TopYKey.self) { minY in
                     // 仅当首次定位到底完成后，才允许"上滑加载更早"（防止进入瞬间误触发导致跳到顶部）
@@ -222,9 +221,15 @@ struct SessionDetailView: View {
         else { proxy.scrollTo(bottomID, anchor: .bottom) }
     }
 
+    /// 视口内"最靠底部"的那条消息（= 输入框正上方那一行）的 id。
+    private func bottomAnchorID() -> String? {
+        let vh = viewportHeight > 0 ? viewportHeight : .greatestFiniteMagnitude
+        let visible = rowFrames.filter { $0.value.maxY > 0 && $0.value.minY < vh }
+        return visible.max { $0.value.minY < $1.value.minY }?.key
+    }
+
     /// 键盘开/合：把"输入框上方那一行"重新锚到输入框上方，使内容随输入框上下移动。
-    private func reanchorBottomVisible(_ proxy: ScrollViewProxy) {
-        guard let id = bottomVisibleID else { return }
+    private func reanchor(_ proxy: ScrollViewProxy, _ id: String) {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 120_000_000)   // 等键盘/布局收缩(回弹)完成
             withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) }
