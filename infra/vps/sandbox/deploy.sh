@@ -18,8 +18,12 @@ echo "[sandbox-deploy] tag=${IMAGE_TAG} (工作目录: $(pwd))"
 ${SUDO:-} env OPENCODE_SANDBOX_TAG="${OPENCODE_SANDBOX_TAG}" docker compose pull opencode-play
 
 # Caddyfile 是 bind mount:内容变了不会重启容器 → 先尝试无损 reload(失败才重建容器)。
+# ⚠️ caddy reload 是一个**新的 exec 进程**,拿不到 entrypoint 在运行时导出的
+# SANDBOX_UPSTREAM_AUTH;若直接 reload,{$SANDBOX_UPSTREAM_AUTH} 会被替换成空 →
+# 上游鉴权失效(全站 401)。故用 Config.Env 里的 PLAYGROUND_SERVER_PASSWORD 现算后注入。
 if ${SUDO:-} docker compose ps --status running --services 2>/dev/null | grep -q '^sandbox-caddy$'; then
-  ${SUDO:-} docker compose exec -T sandbox-caddy caddy reload --config /etc/caddy/Caddyfile \
+  ${SUDO:-} docker compose exec -T sandbox-caddy sh -c \
+    'export SANDBOX_UPSTREAM_AUTH="Basic $(printf "opencode:%s" "$PLAYGROUND_SERVER_PASSWORD" | base64 | tr -d "\n")"; caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile' \
     || ${SUDO:-} env OPENCODE_SANDBOX_TAG="${OPENCODE_SANDBOX_TAG}" docker compose up -d --force-recreate sandbox-caddy
 fi
 
