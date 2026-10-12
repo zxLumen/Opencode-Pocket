@@ -21,6 +21,10 @@ enum Prefs {
         get { (UserDefaults.standard.dictionary(forKey: "opencode.pocket.viewed") as? [String: Double]) ?? [:] }
         set { UserDefaults.standard.set(newValue, forKey: "opencode.pocket.viewed") }
     }
+    static var favoriteModels: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: "opencode.pocket.favModels") ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: "opencode.pocket.favModels") }
+    }
 }
 
 struct MessagesResponse: Decodable {
@@ -71,6 +75,8 @@ final class PocketStore {
     var messageCache: [String: [Message]] = [:]
     var cursorCache: [String: String] = [:]
     var availableModels: [ModelRef] = []
+    var integrations: [Integration] = []
+    var favoriteModels: Set<String> = Prefs.favoriteModels
     var drafts: [String: String] = [:]
     var queued: [String: String] = [:]
     var defaultModelLabel: String = UserDefaults.standard.string(forKey: "opencode.pocket.defaultModel") ?? "" {
@@ -179,7 +185,8 @@ final class PocketStore {
         async let b: Void = loadAgents()
         async let c: Void = loadPending()
         async let d: Void = loadModels()
-        _ = await (a, b, c, d)
+        async let e: Void = loadIntegrations()
+        _ = await (a, b, c, d, e)
     }
 
     func loadModels() async {
@@ -189,13 +196,54 @@ final class PocketStore {
         }
     }
 
-    /// 可选模型：优先服务器返回的列表，回退到现有会话里用过的。
+    func loadIntegrations() async {
+        guard let c = try? client() else { return }
+        if let list = try? await c.getData("/api/integration", as: [Integration].self) {
+            integrations = list
+        }
+    }
+
+    /// 用 API Key 连接一个 provider。
+    @discardableResult
+    func connectKey(integrationID: String, key: String, label: String?) async -> Bool {
+        guard let c = try? client(), !key.isEmpty else { return false }
+        var body: [String: Any] = ["key": key]
+        if let label, !label.isEmpty { body["label"] = label }
+        do {
+            try await c.postJSON("/api/integration/\(integrationID)/connect/key", json: body)
+            await loadIntegrations()
+            await loadModels()
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    func isFavoriteModel(_ m: ModelRef) -> Bool { favoriteModels.contains(m.label) }
+
+    func toggleFavoriteModel(_ m: ModelRef) {
+        if favoriteModels.contains(m.label) { favoriteModels.remove(m.label) } else { favoriteModels.insert(m.label) }
+        Prefs.favoriteModels = favoriteModels
+    }
+
+    func setDefaultModel(_ m: ModelRef) async {
+        defaultModelLabel = m.label
+        guard let c = try? client() else { return }
+        try? await c.request("/api/config", method: "PATCH", json: ["model": m.label])
+    }
+
+    /// 可选模型：优先服务器返回的列表，回退到现有会话里用过的；收藏置顶、按名排序。
     var modelOptions: [ModelRef] {
+        let base = availableModels.isEmpty ? distinctModels : availableModels
         var seen = Set<String>()
         var out: [ModelRef] = []
-        for m in (availableModels.isEmpty ? distinctModels : availableModels)
-        where !seen.contains(m.label) { seen.insert(m.label); out.append(m) }
-        return out
+        for m in base where !seen.contains(m.label) { seen.insert(m.label); out.append(m) }
+        return out.sorted { a, b in
+            let fa = favoriteModels.contains(a.label), fb = favoriteModels.contains(b.label)
+            if fa != fb { return fa }
+            return a.label.localizedCaseInsensitiveCompare(b.label) == .orderedAscending
+        }
     }
 
     func loadSessions() async {

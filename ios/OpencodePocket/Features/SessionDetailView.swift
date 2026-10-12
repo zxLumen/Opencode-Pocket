@@ -44,6 +44,7 @@ struct SessionDetailView: View {
     @State private var olderCursor: String?
     @State private var loadingOlder = false
     @State private var didInitialScroll = false
+    @State private var showModels = false
 
     // 偏移量 + 高度，用于精确判定"是否在底部"（iOS17 可用）
     @State private var topMinY: CGFloat = 0
@@ -188,6 +189,9 @@ struct SessionDetailView: View {
                     .disabled(!isRunning)
             }
         }
+        .sheet(isPresented: $showModels) {
+            NavigationStack { ModelsView(sessionID: sessionID) }
+        }
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
@@ -270,9 +274,11 @@ struct SessionDetailView: View {
 
     private var modelMenu: some View {
         Menu {
-            ForEach(store.modelOptions, id: \.label) { model in
+            ForEach(store.modelOptions.prefix(20), id: \.label) { model in
                 Button(model.label) { Task { await store.switchModel(sessionID: sessionID, model: model) } }
             }
+            Divider()
+            Button("更多模型…") { showModels = true }
         } label: { Image(systemName: "cpu") }
     }
 }

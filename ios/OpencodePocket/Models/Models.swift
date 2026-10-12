@@ -20,6 +20,30 @@ struct ModelDTO: Decodable, Sendable {
     var ref: ModelRef { ModelRef(id: modelID ?? id, providerID: providerID, variant: variant) }
 }
 
+// MARK: - Provider integrations
+
+struct IntegrationMethod: Codable, Hashable, Sendable {
+    var type: String
+    var names: [String]?
+    var methodID: String?
+    var label: String?
+}
+
+struct ConnectionInfo: Codable, Hashable, Sendable {
+    var id: String?
+    var label: String?
+}
+
+struct Integration: Codable, Identifiable, Hashable, Sendable {
+    var id: String
+    var name: String
+    var methods: [IntegrationMethod]?
+    var connections: [ConnectionInfo]?
+
+    var isConnected: Bool { !(connections ?? []).isEmpty }
+    var supportsKey: Bool { (methods ?? []).contains { $0.type == "key" } }
+}
+
 struct Session: Codable, Identifiable, Hashable, Sendable {
     var id: String
     var title: String?

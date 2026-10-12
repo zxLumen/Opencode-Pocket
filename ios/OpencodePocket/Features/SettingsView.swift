@@ -25,11 +25,9 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("默认模型") {
-                    Picker("默认模型", selection: $store.defaultModelLabel) {
-                        Text("默认").tag("")
-                        ForEach(store.modelOptions, id: \.label) { m in Text(m.label).tag(m.label) }
-                    }
+                Section("模型与提供商") {
+                    NavigationLink { ModelsView(sessionID: nil) } label: { Label("模型（默认）", systemImage: "cpu") }
+                    NavigationLink { ProvidersView() } label: { Label("提供商（添加 API Key）", systemImage: "key") }
                 }
 
                 Section("状态") {
