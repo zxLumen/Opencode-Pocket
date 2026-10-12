@@ -15,6 +15,11 @@ ENV HOME=/home/opencode \
     # 禁止 opencode 自更新写自身(镜像内版本不可变)
     OPENCODE_DISABLE_AUTOUPDATE=1
 
+# 辅助服务(static-server.mjs:工作台页 + /config 净化 + /workspace 只读预览)需要一个
+# JS 运行时;官方镜像是 Alpine,自带的运行时里没有 node(只有 busybox),这里补上。
+# 辅助服务只在容器内网 4173 监听,由边缘 Caddy 转发,不对外发布端口。
+RUN apk add --no-cache nodejs
+
 # 预建目录(镜像根文件系统只读后,只有被挂载的路径能写)
 RUN mkdir -p /srv/config-ro \
              /home/opencode/.config/opencode \
@@ -29,12 +34,14 @@ COPY --chown=10001:10001 opencode.json /srv/config-ro/opencode.json
 COPY --chown=10001:10001 seed/AGENTS.md /srv/config-ro/AGENTS.md
 COPY --chown=10001:10001 seed/README.md /srv/config-ro/README.md
 COPY --chown=10001:10001 entrypoint.sh /usr/local/bin/opencode-play-entrypoint
+COPY --chown=10001:10001 static-server.mjs /srv/static-server.mjs
+COPY --chown=10001:10001 hub.html /srv/hub.html
 RUN chmod +x /usr/local/bin/opencode-play-entrypoint
 
 USER 10001:10001
 WORKDIR /workspace
 
-EXPOSE 4096
+EXPOSE 4096 4173
 
 ENTRYPOINT ["/usr/local/bin/opencode-play-entrypoint"]
 # entrypoint exec opencode "$@" → opencode web --hostname 0.0.0.0 --port 4096

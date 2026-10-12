@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>访客沙盒 · 工作台</title>
+<style>
+  :root { --split: 42%; --split-v: 55%; --bar: 10px; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font: 13px/1.4 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #111; background: #1b1b1b; overflow: hidden;
+  }
+  #workbench { display: flex; flex-direction: row; height: 100dvh; width: 100vw; }
+  body.stacked #workbench { flex-direction: column; }
+
+  .pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #fff; }
+  #pane-session { flex: 0 0 var(--split); }
+  body.stacked #pane-session { flex: 0 0 var(--split-v); }
+  #pane-site { flex: 1 1 auto; }
+
+  .pane-head {
+    flex: 0 0 auto; height: 28px; display: flex; align-items: center; gap: 6px;
+    padding: 0 8px; background: #f4f4f5; border-bottom: 1px solid #e4e4e7;
+    font-size: 12px; color: #52525b; user-select: none; -webkit-user-select: none;
+  }
+  .pane-head b { font-weight: 600; color: #18181b; }
+  .pane-head .spacer { flex: 1 1 auto; }
+  .pane-head .dot { width: 6px; height: 6px; border-radius: 50%; background: #a1a1aa; }
+  .pane-head .dot.on { background: #22c55e; }
+  .pane-head button {
+    font: inherit; padding: 1px 8px; border: 1px solid #d4d4d8; background: #fff;
+    border-radius: 5px; color: #3f3f46; cursor: pointer;
+  }
+  .pane-head button:active { background: #e4e4e7; }
+
+  iframe { flex: 1 1 auto; width: 100%; height: 100%; border: 0; min-height: 0; background: #fff; }
+
+  #bar { flex: 0 0 var(--bar); background: #1b1b1b; cursor: col-resize; position: relative; touch-action: none; }
+  body.stacked #bar { cursor: row-resize; }
+  #bar::after {
+    content: ""; position: absolute; inset: 0; margin: auto;
+    width: 3px; height: 30px; border-radius: 3px; background: #52525b;
+  }
+  body.stacked #bar::after { width: 30px; height: 3px; }
+  #bar:hover::after, #bar.dragging::after, #bar:focus-visible::after { background: #3b82f6; }
+  #bar:focus-visible { outline: none; }
+</style>
+</head>
+<body>
+<div id="workbench">
+  <section class="pane" id="pane-session">
+    <div class="pane-head">
+      <b>会话</b>
+      <span class="spacer"></span>
+      <span id="sid-label"></span>
+    </div>
+    <iframe id="f-session" title="会话" src="about:blank"></iframe>
+  </section>
+
+  <div id="bar" role="separator" aria-orientation="vertical" aria-label="拖动调整两栏比例" tabindex="0"></div>
+
+  <section class="pane" id="pane-site">
+    <div class="pane-head">
+      <b>网站</b>
+      <span class="dot" id="live-dot" title="实时监测中"></span>
+      <span class="spacer"></span>
+      <button type="button" id="reload">刷新</button>
+    </div>
+    <iframe id="f-site" title="网站预览" src="/preview/"></iframe>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var SID = "__SESSION_ID__";
+  var SITE_URL = "/preview/";
+  var KEY_H = "zx_hub_split";
+  var KEY_V = "zx_hub_split_v";
+
+  document.getElementById("sid-label").textContent = SID;
+  document.getElementById("f-session").src = "/global/session/" + SID;
+
+  // ---- 分栏拖拽(横向;手机端纵向) ----
+  var bar = document.getElementById("bar");
+  var wb = document.getElementById("workbench");
+  var dragging = false;
+
+  function stacked() { return document.body.classList.contains("stacked"); }
+  function setRatio(v, save) {
+    var r = Math.min(0.85, Math.max(0.15, v));
+    if (stacked()) {
+      document.documentElement.style.setProperty("--split-v", (r * 100).toFixed(2) + "%");
+      if (save) try { localStorage.setItem(KEY_V, String(r)); } catch (e) {}
+    } else {
+      document.documentElement.style.setProperty("--split", (r * 100).toFixed(2) + "%");
+      if (save) try { localStorage.setItem(KEY_H, String(r)); } catch (e) {}
+    }
+  }
+  function ratioFromEvent(ev) {
+    var rect = wb.getBoundingClientRect();
+    return stacked() ? (ev.clientY - rect.top) / rect.height : (ev.clientX - rect.left) / rect.width;
+  }
+  bar.addEventListener("pointerdown", function (ev) {
+    dragging = true; bar.classList.add("dragging");
+    try { bar.setPointerCapture(ev.pointerId); } catch (e) {}
+    ev.preventDefault();
+  });
+  bar.addEventListener("pointermove", function (ev) { if (dragging) setRatio(ratioFromEvent(ev), false); });
+  function stopDrag(ev) {
+    if (!dragging) return;
+    dragging = false; bar.classList.remove("dragging");
+    try { bar.releasePointerCapture(ev.pointerId); } catch (e) {}
+    setRatio(ratioFromEvent(ev), true);
+  }
+  bar.addEventListener("pointerup", stopDrag);
+  bar.addEventListener("pointercancel", stopDrag);
+  bar.addEventListener("keydown", function (ev) {
+    var step = 0.03, cur = 0;
+    try {
+      var raw = stacked() ? localStorage.getItem(KEY_V) : localStorage.getItem(KEY_H);
+      cur = raw === null ? (stacked() ? 0.55 : 0.42) : Number(raw);
+    } catch (e) { cur = 0.42; }
+    if (stacked()) { if (ev.key === "ArrowUp") step = -0.03; else if (ev.key === "ArrowDown") step = 0.03; else return; }
+    else { if (ev.key === "ArrowLeft") step = -0.03; else if (ev.key === "ArrowRight") step = 0.03; else return; }
+    ev.preventDefault();
+    setRatio(cur + step, true);
+  });
+
+  // 恢复上次比例
+  try {
+    var h = localStorage.getItem(KEY_H), v = localStorage.getItem(KEY_V);
+    if (h !== null) document.documentElement.style.setProperty("--split", (Number(h) * 100).toFixed(2) + "%");
+    if (v !== null) document.documentElement.style.setProperty("--split-v", (Number(v) * 100).toFixed(2) + "%");
+  } catch (e) {}
+
+  // ---- 手机端改为上下分栏 ----
+  var mq = window.matchMedia("(max-width: 820px)");
+  function layout() {
+    document.body.classList.toggle("stacked", mq.matches);
+    bar.setAttribute("aria-orientation", mq.matches ? "horizontal" : "vertical");
+  }
+  layout();
+  if (mq.addEventListener) mq.addEventListener("change", layout);
+  else if (mq.addListener) mq.addListener(layout);
+
+  // ---- 网站实时预览:每 1 秒探测文件是否变化,变了才刷新(不闪、不丢状态) ----
+  var site = document.getElementById("f-site");
+  var dot = document.getElementById("live-dot");
+  var lastTag = null;
+
+  function reload() { site.src = SITE_URL + "?t=" + Date.now(); }
+  document.getElementById("reload").addEventListener("click", reload);
+
+  function probe() {
+    var ctl = typeof AbortController === "function" ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 4000);
+    fetch(SITE_URL, { method: "HEAD", cache: "no-store", signal: ctl ? ctl.signal : undefined })
+      .then(function (res) {
+        clearTimeout(timer);
+        var tag = res.status + "|" + (res.headers.get("last-modified") || "") + "|" + (res.headers.get("content-length") || "");
+        dot.classList.toggle("on", res.ok);
+        if (lastTag !== null && tag !== lastTag) reload();
+        lastTag = tag;
+      })
+      .catch(function () { clearTimeout(timer); dot.classList.remove("on"); });
+  }
+  probe();
+  setInterval(probe, 1000);
+})();
+</script>
+</body>
+</html>

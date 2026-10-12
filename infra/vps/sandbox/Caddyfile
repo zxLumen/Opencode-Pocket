@@ -1,34 +1,97 @@
 # 访客沙盒 · 边缘 Caddy(站点地址 :80)
 #
-# 「锁定」的全部逻辑都在本文件:文档请求只认唯一会话、其余 302 跳回;自建外壳
-# (内联 heredoc,取二进制里的真 index.html 后注入隐藏与守卫);写入白名单只放行该
-# 会话下的对话操作;pty/shell/tui 与 session/fork 全阶段封禁。
+# 三层职责都在本文件:
+#   ① 访客锁定 —— 文档请求只认唯一会话,其余 302 回工作台;自建外壳(注入隐藏与守卫)
+#   ② 工作台 —— GET / 返回双栏工作台(会话 | 网站实时预览);入口不再直接是会话
+#   ③ 模型封锁 —— 访客看不到、也换不了模型(读接口净空 + 写接口 403 + 前端隐藏)
 #
-# 为什么单独一个 Caddy:这样访客锁定的配置完全属于本仓库,与博客的 Caddyfile 互不
-# 影响(博客侧只有 3 行固定转发)。本服务不发布端口,由博客栈的 Caddy 做 TLS 后转发
-# 到 sandbox-caddy:80;上游 opencode-play 与本服务同在 docker_play 网络(external)。
+# 为什么单独一个 Caddy:访客锁定的配置完全属于本仓库,与博客的 Caddyfile 互不影响
+# (博客侧只有 3 行固定转发)。本服务不发布端口,由博客栈的 Caddy 做 TLS 后转发到
+# sandbox-caddy:80;上游 opencode-play(以及沙盒内辅助服务 :4173)与本服务同在
+# docker_play 网络(external)。
 #
 # 会话 id 用 {$PLAYGROUND_SESSION_ID:ses_guest}(默认 ses_guest,由 compose 注入)。
-# 本段原在 zxLumen-Blog 的 docker/Caddyfile,2026-10 整体迁到本仓库。
+# 辅助服务(4173,见 infra/vps/sandbox/static-server.mjs)提供:/__hub 工作台页、
+# /__config 净化配置(去掉含密钥的 provider)、/preview/* 工作区只读预览。
 :80 {
-
 	header {
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		-Server
 	}
 
-	# ① 全阶段封禁(含 GET):PTY / shell / TUI 一律不可达
+	# ① 全阶段封禁(含 GET):PTY / shell / TUI,以及「改模型」
 	@banned path_regexp ^/(api/)?(pty|shell|tui)(/|$)
 	@bannedSub path_regexp ^/session/[^/]+/(shell|fork)(/|$)
+	@bannedModel path_regexp ^/(api/)?session/[^/]+/model$
 	handle @banned {
 		respond 403
 	}
 	handle @bannedSub {
 		respond 403
 	}
+	handle @bannedModel {
+		respond 403
+	}
 
-	# ② 真外壳:供自建外壳 fetch(不带 text/html),取回二进制里的 index.html 原文
+	# ② 网站预览通道(只读):透传到沙盒内辅助服务的静态文件服务(根 = /workspace)
+	@preview path_regexp ^/preview(/|$)
+	handle @preview {
+		@previewRead method GET HEAD
+		handle @previewRead {
+			reverse_proxy opencode-play:4173
+		}
+		handle {
+			respond 403
+		}
+	}
+
+	# ③ 模型「查看」面净空:不再暴露供应商 / 模型清单(回空壳,避免前端报错)
+	@modelProvider path_regexp ^/(api/)?provider(/|$)
+	handle @modelProvider {
+		@get method GET HEAD
+		handle @get {
+			respond `{"all":[],"default":{},"connected":[]}` 200
+		}
+		handle {
+			respond 403
+		}
+	}
+	@modelListV2 path /api/model
+	handle @modelListV2 {
+		respond `{"location":{},"data":[]}` 200
+	}
+	@configProviders path /config/providers
+	handle @configProviders {
+		respond `{"providers":[]}` 200
+	}
+
+	# ④ /config、/global/config:走沙盒内辅助服务的净化代理(去掉 provider 块里的
+	#    网关密钥与内网地址);直接 403 会让前端 bootstrap 报错,故用净化替代
+	@configPath path /config
+	handle @configPath {
+		@cfgRead method GET HEAD
+		handle @cfgRead {
+			rewrite * /__config
+			reverse_proxy opencode-play:4173
+		}
+		handle {
+			respond 403
+		}
+	}
+	@globalConfigPath path /global/config
+	handle @globalConfigPath {
+		@cfgRead2 method GET HEAD
+		handle @cfgRead2 {
+			rewrite * /__gconfig
+			reverse_proxy opencode-play:4173
+		}
+		handle {
+			respond 403
+		}
+	}
+
+	# ⑤ 真外壳:供自建外壳 fetch(不带 text/html),取回二进制里的 index.html 原文
 	handle /__shell {
 		rewrite * /
 		reverse_proxy opencode-play:4096 {
@@ -36,9 +99,16 @@
 		}
 	}
 
-	# ③ HTML 文档请求:只认固定会话路径(返回自建外壳),其余一律 302 跳回固定会话
+	# ⑥ HTML 文档请求
 	@htmldoc header Accept *text/html*
 	handle @htmldoc {
+		# 入口 = 工作台(会话 | 网站预览)
+		@rootDoc path / /hub
+		handle @rootDoc {
+			rewrite * /__hub
+			reverse_proxy opencode-play:4173
+		}
+		# 固定会话路径 = 会话外壳(嵌在工作台左栏)
 		@atSession path_regexp ^/(global|server/[^/]+)/session/{$PLAYGROUND_SESSION_ID:ses_guest}(/|$)
 		handle @atSession {
 			header Content-Type "text/html; charset=utf-8"
@@ -50,14 +120,16 @@
 			<script>
 			(function(){
 			var S=JSON.stringify(location.pathname.replace(/\/+$/,""));
+			var SEL="header,aside,[data-slot=user-message-meta],[data-slot=text-part-meta],button:has(svg[data-component=provider-icon])";
 			var code="(function(){var S="+S+";"+
-			"function hide(){try{var e=document.querySelectorAll('header,aside');for(var i=0;i<e.length;i++)e[i].style.setProperty('display','none','important');}catch(err){}}"+
+			"var SEL="+JSON.stringify(SEL)+";"+
+			"function hide(){try{var e=document.querySelectorAll(SEL);for(var i=0;i<e.length;i++)e[i].style.setProperty('display','none','important');}catch(err){}}"+
 			"function guard(){var p=location.pathname;if((p==='/'||p==='/global'||p==='/global/')&&S)location.replace(S);}"+
 			"new MutationObserver(hide).observe(document.documentElement,{childList:true,subtree:true});"+
 			"document.addEventListener('DOMContentLoaded',hide);hide();guard();setInterval(guard,800);"+
 			"document.addEventListener('keydown',function(ev){if(!(ev.metaKey||ev.ctrlKey))return;var k=(ev.key||'').toLowerCase();if(k==='k'||k==='n'||k===','||k==='p')ev.preventDefault();},true);"+
 			"})();";
-			var inject="<style>header,aside{display:none!important}</style><scr"+"ipt>"+code+"<\/scr"+"ipt>";
+			var inject="<style>"+SEL+"{display:none!important}</style><scr"+"ipt>"+code+"<\/scr"+"ipt>";
 			var html="";
 			try{var x=new XMLHttpRequest();x.open("GET","/__shell",false);x.send();html=x.responseText;}catch(err){}
 			if(html&&html.indexOf("</head>")>=0){document.write(html.replace("</head>",inject+"</head>"));}
@@ -68,13 +140,15 @@
 			</html>
 			HTML 200
 		}
+		# 其它文档请求一律拉回工作台
 		handle {
-			redir * /global/session/{$PLAYGROUND_SESSION_ID:ses_guest} 302
+			redir * / 302
 		}
 	}
 
-	# ④ 写入白名单:非 GET/HEAD/OPTIONS 仅放行固定会话下的子路径,其余 403
-	#    (建会话 POST /session、改配置 PATCH /config、加项目 POST /project/* 等全被挡)
+	# ⑦ 写入白名单:非 GET/HEAD/OPTIONS 仅放行固定会话下的子路径,其余 403
+	#    (建会话 POST /session、改配置 PATCH /config、加项目 POST /project/* 等全被挡;
+	#     改模型 POST /session/<id>/model 已在 ① 全阶段封禁)
 	@write not method GET HEAD OPTIONS
 	@allowed path_regexp ^/session/{$PLAYGROUND_SESSION_ID:ses_guest}/
 	handle @write {
