@@ -107,9 +107,10 @@ docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容�
 7. **写入白名单**：只放行 `^/session/<id>/` 下的对话操作，以及
    `POST /api/session/<id>/agent`（Plan/Build 切换）；其它一律 `403`。
 8. 会话 id 由 `PLAYGROUND_SESSION_ID` 注入（默认 `ses_guest`）。
-9. **静态资源长缓存**：`GET /assets/*.{js,css,woff2,图片}` —— bundle 文件名带内容哈希
-   （如 `index-BkjnPp3h.js`），可安全 `Cache-Control: public, max-age=31536000, immutable`
-   一年；否则访客每次进入都要重下约 2.7MB 的 SPA bundle（进入慢的主因之一）。
+9. **静态资源长缓存**：`GET /assets/*.{js,css,woff2,ttf,otf,mp4,webm,图片…}` —— 文件名带内容哈希
+   （如 `index-BkjnPp3h.js`），统一 `Cache-Control: public, max-age=31536000, immutable`
+   一年。⚠️ 正则**必须覆盖 `ttf`/`mp4`**：漏掉会让字体（`Inter.ttf` 462KB）与视频
+   （`introducing-tabs*.mp4` 1.37MB）走兜底反代、没有缓存头 → 每次访问都重下。
 10. **响应压缩**：站点级 `encode zstd gzip` —— 未压缩的 SPA bundle 约 2.7MB，压缩后约 0.8MB
     （首访提速约 3.4×）。opencode 的 SSE 响应带 `Cache-Control: no-cache, no-transform`，
     Caddy 据此**跳过压缩**，事件流保持不缓冲直通，AI 实时流式不受影响。
@@ -163,9 +164,31 @@ docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容�
 - **斜杠命令全禁**：输入框以 `/` 开头会弹出命令菜单（内置的 `/new /undo /compact /fork
   /export /open /terminal /mcp /model /agent` + 服务端的 `init /review /customize-opencode`）。
   外壳在 `window` 捕获阶段拦掉「输入框为空时按下的 `/`」与「输入以 `/` 开头时的回车」，
-  从根上阻止菜单弹出与命令执行；边缘再把 `GET /command`、`GET /api/command` 目录置空。
+  从根上阻止菜单弹出与命令执行。⚠️ **只在客户端拦**：**不要**在边缘把 `GET /command` /
+  `GET /api/command` 置空 —— 那会让 SPA 的 command bootstrap 抛
+  `((intermediate value).data ?? []).map is not a function`，并弹「无法重新加载」错误 toast。
 - 服务端仍按 `opencode.json` 固定的 `zxgw/gateway-default` 走博客 AI 网关，不受影响；
   Plan/Build 只切换 agent 模式，模型始终固定。
+
+## 首访提速（加载优化）
+
+访客「第一次打开慢」主要在**字节**与**主线程**；服务端各接口仅 40–70ms（非瓶颈）：
+
+- **外壳不再用同步 XHR**：过去是「外壳页 + `XMLHttpRequest(...,false)` 拉 `/__shell`
+  + `document.write`」，会阻塞一拍、且 bundle 发现晚。现在由容器内辅助服务
+  （`static-server.mjs` 的 `/__shell`）**取回 opencode 的 index.html、注入外壳代码后
+  一次性返回**（`handle @atSession` 直接反代它）；浏览器 1 个请求即拿到终态 HTML，
+  bundle/CSS 立即并行下载。外壳客户端代码/样式**集中在 `static-server.mjs`**（单一来源）。
+- **资源缓存**：见上文第 9 条（`ttf`/`mp4` 必须一并 immutable）。
+- **字体预载**：外壳注入 `<link rel="preload" as="font" href="/assets/Inter.ttf">`。
+- **highlights 弹窗 + 视频**：首次访问会弹「新特性」浮层并预载 1.37MB 视频。边缘
+  `@highlightVideo → 204` 掐掉视频字节；外壳 CSS 再隐藏该浮层
+  （`div[class*="h-[240px]"][class*="w-[192px]"]`）。
+- **错误 toast**：`/api/reference` 对「乱码目录」会 500 → 弹「无法重新加载」。边缘补一个
+  合法空列表；另用 CSS 隐藏 sonner toast 作兜底（`[data-sonner-toaster]`）。
+- **离屏消息延迟渲染**：对 `[data-component="session-turn"]` 注入
+  `content-visibility:auto; contain-intrinsic-size:auto 320px`，首屏先渲染可见部分。
+- **命令目录不要边缘拦截**（见「斜杠命令全禁」的警告）。
 
 ## 隔离边界：容器，不是权限配置
 

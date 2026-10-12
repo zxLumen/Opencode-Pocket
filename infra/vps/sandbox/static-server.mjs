@@ -54,6 +54,86 @@ const send = (res, status, body, headers = {}) => {
   res.end(body);
 };
 const notFound = (res) => send(res, 404, "not found", { "Content-Type": "text/plain; charset=utf-8" });
+
+// ---------- 会话外壳(/__shell):取回 opencode 的 index.html 并注入外壳代码后一次性返回 ----------
+// 过去是「外壳页 + 同步 XHR 拉 /__shell + document.write」,会阻塞一拍且晚发现 bundle;
+// 现在由本服务在服务端注入后直接返回终态 HTML,浏览器拿到即解析、立刻并行下载 bundle/CSS。
+// 外壳客户端代码/样式原先内联在 Caddyfile 里,现集中到这里(单一来源、便于维护)。
+const SHELL_CSS = [
+  'header,aside,[data-slot=user-message-meta],[data-slot=text-part-meta],button[data-action=prompt-model],button:has(svg[data-component=provider-icon]){display:none!important}',
+  '[class*="md:max-w-200"],[class*="2xl:max-w-[1000px]"]{max-width:none!important}',
+  '[data-zx-ag]{display:inline-flex;gap:4px;margin:0 2px;padding:2px;align-items:center}',
+  '[data-zx-ag] button{font:12px/1.2 system-ui;color:inherit;background:transparent;border:1px solid rgba(128,128,128,.4);border-radius:999px;padding:2px 10px;cursor:pointer}',
+  '[data-zx-ag] button.on{background:#3574f0;border-color:#3574f0;color:#fff}',
+  'div[class*="h-[240px]"][class*="w-[192px]"]{display:none!important}',
+  '[data-sonner-toaster],[data-sonner-toast]{display:none!important}',
+  '[data-component="session-turn"]{content-visibility:auto;contain-intrinsic-size:auto 320px}',
+].join("");
+
+const SHELL_CLIENT = `(function(){
+var S=JSON.stringify(location.pathname.replace(/\\/+$/,""));
+var AG="zx-sandbox-agent";
+try{var RK="settings.v3",rw=localStorage.getItem(RK),ro=rw?JSON.parse(rw):{};ro=(ro&&typeof ro==="object")?ro:{};ro.general=(ro.general&&typeof ro.general==="object")?ro.general:{};if(ro.general.showReasoningSummaries!==true){ro.general.showReasoningSummaries=true;localStorage.setItem(RK,JSON.stringify(ro));}}catch(err){}
+try{if(!localStorage.getItem("highlights.v1"))localStorage.setItem("highlights.v1",JSON.stringify({version:"seen"}));}catch(err){}
+var SEL="header,aside,[data-slot=user-message-meta],[data-slot=text-part-meta],button[data-action=prompt-model]";
+function hideNow(n){try{var e=n.querySelectorAll(SEL);for(var i=0;i<e.length;i++)e[i].style.setProperty("display","none","important");}catch(err){}}
+function hideAll(){try{var e=document.querySelectorAll(SEL);for(var i=0;i<e.length;i++)e[i].style.setProperty("display","none","important");}catch(err){}}
+function ag(){try{var m=document.querySelector("button[data-action=prompt-model]");if(!m||!m.parentElement)return;var host=m.parentElement,cur=localStorage.getItem(AG)||"plan",bar=document.querySelector("[data-zx-ag]");if(bar&&bar.dataset.v===cur)return;if(!bar){bar=document.createElement("div");bar.setAttribute("data-zx-ag","1");host.appendChild(bar);}bar.dataset.v=cur;bar.textContent="";["plan","build"].forEach(function(a){var b=document.createElement("button");b.textContent=a==="plan"?"Plan":"Build";if(a===cur)b.className="on";b.addEventListener("click",function(){try{fetch("/api/session/ses_guest/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent:a})});}catch(err){}localStorage.setItem(AG,a);bar.dataset.v="";ag();});bar.appendChild(b);});}catch(err){}}
+function guard(){var p=location.pathname;if((p==="/"||p==="/global"||p==="/global/")&&S)location.replace(S);}
+function syncAgent(){var want=localStorage.getItem(AG)||"plan";try{fetch("/api/session/ses_guest",{headers:{Accept:"application/json"}}).then(function(r){return r.json();}).then(function(d){var cur=d&&d.data&&d.data.agent;if(cur&&cur!==want)return fetch("/api/session/ses_guest/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent:want})}).catch(function(){});}).catch(function(){});}catch(err){}}
+var q=[],sched=false;
+function flush(){sched=false;var l=q;q=[];for(var i=0;i<l.length;i++)hideNow(l[i]);ag();}
+function onMut(recs){var dirty=false;for(var i=0;i<recs.length;i++){var r=recs[i];if(r.type!=="childList")continue;dirty=true;for(var j=0;j<r.addedNodes.length;j++){var a=r.addedNodes[j];if(a.nodeType===1)q.push(a);}}if(dirty&&!sched){sched=true;requestAnimationFrame(flush);}}
+function run(){hideAll();ag();}
+new MutationObserver(onMut).observe(document.documentElement,{childList:true,subtree:true});
+document.addEventListener("DOMContentLoaded",function(){run();syncAgent();});run();guard();setInterval(guard,800);
+function keyb(ev){if(!(ev.metaKey||ev.ctrlKey))return;var k=(ev.key||"").toLowerCase();if(k==="k"||k==="n"||k===","||k==="p"||(k==="r"&&ev.shiftKey)){ev.preventDefault();ev.stopImmediatePropagation();}}
+window.addEventListener("keydown",keyb,true);document.addEventListener("keydown",keyb,true);
+function slashG(ev){var k=ev.key;if(k!=="/"&&k!=="Enter")return;var t=ev.target;var pi=t&&t.closest?t.closest('[data-component="prompt-input"]'):null;if(!pi)return;var x=(pi.textContent||"").trim();if(k==="/"&&x===""){ev.preventDefault();ev.stopImmediatePropagation();}if(k==="Enter"&&!ev.shiftKey&&x.charAt(0)==="/"){ev.preventDefault();ev.stopImmediatePropagation();}}
+window.addEventListener("keydown",slashG,true);
+})();`;
+
+let shellCache = null; // { html, at }
+async function fetchUpstreamHtml(tries = 5) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetch(UPSTREAM + "/", { headers: { accept: "text/html" } });
+      if (r.ok) return r;
+      lastErr = new Error("upstream " + r.status);
+    } catch (err) {
+      lastErr = err;
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  throw lastErr;
+}
+
+function injectShell(html) {
+  const preload = '<link rel="preload" as="font" type="font/ttf" href="/assets/Inter.ttf" crossorigin>';
+  const inject = "<style>" + SHELL_CSS + "</style>" + preload + "<script>" + SHELL_CLIENT + "</scr" + "ipt>";
+  if (html.includes("<head>")) return html.replace("<head>", "<head>" + inject);
+  if (html.includes("</head>")) return html.replace("</head>", inject + "</head>");
+  return inject + html;
+}
+
+async function serveShell(req, res) {
+  const now = Date.now();
+  let html;
+  try {
+    if (!shellCache || now - shellCache.at > 30000) {
+      const r = await fetchUpstreamHtml(20);
+      shellCache = { html: await r.text(), at: now };
+    }
+    html = injectShell(shellCache.html);
+  } catch {
+    return send(res, 200,
+      '<!doctype html><meta charset=utf-8><p style="font:14px system-ui;padding:2rem">沙盒正在启动，请稍后刷新。</p>',
+      { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+  }
+  res.writeHead(200, { ...baseHeaders, "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+  res.end(req.method === "HEAD" ? undefined : html);
+}
 // 预览根还没 index.html 时的友好提示(右栏不显示裸 404)
 const PREVIEW_HINT =
   '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>访客的网站</title>' +
@@ -159,6 +239,7 @@ const server = createServer(async (req, res) => {
   const pathname = url.pathname;
 
   if (pathname === "/__hub") return serveHub(req, res);
+  if (pathname === "/__shell") return serveShell(req, res);
   if (pathname === "/__config") return serveSanitizedConfig(res, "/config", url.search);
   if (pathname === "/__gconfig") return serveSanitizedConfig(res, "/global/config", url.search);
   if (pathname === "/__preview-health") return send(res, 200, "ok", { "Content-Type": "text/plain" });
