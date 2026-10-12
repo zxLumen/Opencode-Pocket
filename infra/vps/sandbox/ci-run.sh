@@ -39,4 +39,49 @@ if [ "${IMAGE_TAG}" != "latest" ]; then
   echo "==> 配置已更新"
 fi
 
+# 自愈：博客站点的 Caddyfile 由 zxLumen-Blog 仓库同步，可能把 /pocketd 路由覆盖掉
+# (App 传图依赖它；丢了会 POST /pocketd/upload 落到 opencode 返回 405)。
+# 幂等：缺了才补，补完 reload；不依赖博客仓库那次部署是否记得带上。
+ensure_pocketd_route() {
+  local F="/home/ubuntu/zxLumen-Blog/docker/Caddyfile"
+  [ -f "${F}" ] || return 0
+  grep -q 'handle /pocketd/\*' "${F}" && return 0
+  echo "==> 补 /pocketd 路由:${F}"
+  python3 - "${F}" <<'PY' || true
+import sys
+F = sys.argv[1]
+s = open(F, encoding='utf-8').read()
+old = """	reverse_proxy host.docker.internal:4096 {
+		# SSE(/api/event)必须关闭缓冲
+		flush_interval -1
+	}
+"""
+new = """	# App 图片上传中继：/pocketd/upload -> pocketd(8788)/upload
+	handle /pocketd/* {
+		uri strip_prefix /pocketd
+		reverse_proxy host.docker.internal:8788
+	}
+	handle {
+		reverse_proxy host.docker.internal:4096 {
+			# SSE(/api/event)必须关闭缓冲
+			flush_interval -1
+		}
+	}
+"""
+if s.count(old) == 1:
+    open(F, "w", encoding="utf-8").write(s.replace(old, new))
+    print("patched")
+else:
+    print(f"skip: anchor count={s.count(old)}")
+PY
+  if docker exec docker-caddy-1 caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+    docker exec docker-caddy-1 caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
+    echo "==> 已补丁并 reload"
+  fi
+}
+ensure_pocketd_route || true
+
 ./deploy.sh "${IMAGE_TAG}"
+
+# deploy 之后再确保一次（避免本次部署过程中被覆盖）
+ensure_pocketd_route || true
