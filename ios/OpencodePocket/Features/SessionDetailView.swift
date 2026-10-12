@@ -13,6 +13,12 @@ private struct ViewHKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
+private struct RowFrameKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { _, b in b }
+    }
+}
 
 struct ExpandableSection<Content: View>: View {
     let title: String
@@ -45,6 +51,7 @@ struct SessionDetailView: View {
     @State private var loadingOlder = false
     @State private var didInitialScroll = false
     @State private var showModels = false
+    @State private var bottomVisibleID: String?
 
     // 偏移量 + 高度，用于精确判定"是否在底部"（iOS17 可用）
     @State private var topMinY: CGFloat = 0
@@ -106,7 +113,12 @@ struct SessionDetailView: View {
                         }
 
                         ForEach(visibleMessages) { message in
-                            MessageRow(message: message).id(message.id)
+                            MessageRow(message: message)
+                                .id(message.id)
+                                .background(GeometryReader { g in
+                                    Color.clear.preference(key: RowFrameKey.self,
+                                                           value: [message.id: g.frame(in: .named("scroll"))])
+                                })
                         }
 
                         if let q = store.queued[sessionID], !q.isEmpty {
@@ -148,6 +160,17 @@ struct SessionDetailView: View {
                 .onPreferenceChange(TopYKey.self) { topMinY = $0 }
                 .onPreferenceChange(ContentHKey.self) { contentHeight = $0 }
                 .onPreferenceChange(ViewHKey.self) { viewportHeight = $0 }
+                .onPreferenceChange(RowFrameKey.self) { frames in
+                    // 视口内"最靠底部"的那条（= 输入框正上方那一行）
+                    let visible = frames.filter { $0.value.maxY > 0 && $0.value.minY < viewportHeight }
+                    bottomVisibleID = visible.max { $0.value.minY < $1.value.minY }?.key
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                    reanchorBottomVisible(proxy)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                    reanchorBottomVisible(proxy)
+                }
                 .onPreferenceChange(TopYKey.self) { minY in
                     // 仅当首次定位到底完成后，才允许"上滑加载更早"（防止进入瞬间误触发导致跳到顶部）
                     if didInitialScroll, minY > -60, olderCursor?.isEmpty == false, !loadingOlder {
@@ -197,6 +220,15 @@ struct SessionDetailView: View {
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
         if animated { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) } }
         else { proxy.scrollTo(bottomID, anchor: .bottom) }
+    }
+
+    /// 键盘开/合：把"输入框上方那一行"重新锚到输入框上方，使内容随输入框上下移动。
+    private func reanchorBottomVisible(_ proxy: ScrollViewProxy) {
+        guard let id = bottomVisibleID else { return }
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 120_000_000)   // 等键盘/布局收缩(回弹)完成
+            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) }
+        }
     }
 
     private func seedFromCache() {
