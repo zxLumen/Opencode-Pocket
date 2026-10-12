@@ -95,7 +95,13 @@ final class PocketStore {
     private var eventTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
+    private var flushTask: Task<Void, Never>?
     private var pollTick = 0
+    private var eventsConnected = false
+
+    /// 流式增量缓冲：合流后（~80ms）再写入 liveText/liveReasoning，
+    /// 避免每个 token 都触发 SwiftUI 整页重绘。
+    private var liveBuf: [String: (text: String, reasoning: String)] = [:]
 
     // MARK: - Connection
 
@@ -104,6 +110,7 @@ final class PocketStore {
     }
 
     func connect() async {
+        guard phase != .connecting else { return }
         phase = .connecting
         lastError = nil
         if !password.isEmpty { Credentials.password = password }
@@ -147,6 +154,7 @@ final class PocketStore {
     private func markOfflineIfNetwork(_ error: Error) {
         if Self.isNetwork(error) {
             offline = true
+            eventsConnected = false
             startReconnect()
         }
     }
@@ -172,10 +180,32 @@ final class PocketStore {
     }
 
     func disconnect() {
+        suspend()
+        phase = .disconnected
+    }
+
+    /// 进入后台：停止 SSE / 轮询 / 重连 / 合流，避免后台空转与回前台重连风暴。
+    func suspend() {
         eventTask?.cancel(); eventTask = nil
         pollTask?.cancel(); pollTask = nil
         reconnectTask?.cancel(); reconnectTask = nil
-        phase = .disconnected
+        flushTask?.cancel(); flushTask = nil
+        eventsConnected = false
+    }
+
+    /// 回到前台：已连接则恢复 SSE / 轮询并刷新；未连接则尝试重连。
+    func handleBecameActive() async {
+        guard Credentials.isConfigured else { return }
+        switch phase {
+        case .connected:
+            startEvents()
+            startPolling()
+            await refreshAll()
+        case .disconnected:
+            await connect()
+        default:
+            break
+        }
     }
 
     // MARK: - Loading
@@ -186,7 +216,8 @@ final class PocketStore {
         async let c: Void = loadPending()
         async let d: Void = loadModels()
         async let e: Void = loadIntegrations()
-        _ = await (a, b, c, d, e)
+        async let f: Void = loadActive()
+        _ = await (a, b, c, d, e, f)
     }
 
     func loadModels() async {
@@ -259,7 +290,6 @@ final class PocketStore {
             if changed { Prefs.viewed = lastViewedAt }
             offline = false
         } catch { markOfflineIfNetwork(error) }
-        await loadActive()
     }
 
     func loadActive() async {
@@ -343,11 +373,14 @@ final class PocketStore {
         pollTick = 0
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
                 guard let self else { break }
+                // SSE 正常时大幅降频（仅作安全网）；断流时稍快兜底。
+                let interval: UInt64 = self.eventsConnected ? 30_000_000_000 : 10_000_000_000
+                try? await Task.sleep(nanoseconds: interval)
+                if Task.isCancelled { break }
                 await self.loadActive()
                 self.pollTick += 1
-                if self.pollTick % 2 == 0 {
+                if self.pollTick % 3 == 0 {
                     await self.loadSessions()
                     await self.loadPending()
                 }
@@ -355,16 +388,38 @@ final class PocketStore {
         }
     }
 
+    /// 最多约每 80ms 把流式缓冲写入 liveText/liveReasoning 一次。
+    private func scheduleFlush() {
+        guard flushTask == nil else { return }
+        flushTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard let self else { return }
+            self.flushLive()
+            self.flushTask = nil
+        }
+    }
+
+    private func flushLive() {
+        guard !liveBuf.isEmpty else { return }
+        for (sid, buf) in liveBuf {
+            if !buf.text.isEmpty { liveText[sid, default: ""] += buf.text }
+            if !buf.reasoning.isEmpty { liveReasoning[sid, default: ""] += buf.reasoning }
+        }
+        liveBuf.removeAll(keepingCapacity: true)
+    }
+
     private func handle(_ event: OpenCodeEvent) {
+        eventsConnected = true
         let type = event.type
         let sid = event.sessionID
 
-        // 流式增量（回答 / 思考）
+        // 流式增量（回答 / 思考）：先进缓冲区，合流后再写入，避免逐 token 重绘
         if type.contains("delta"), let sid {
             let d = event.delta ?? event.text ?? ""
             if !d.isEmpty {
-                if type.contains("reasoning") { liveReasoning[sid, default: ""] += d }
-                else { liveText[sid, default: ""] += d }
+                if type.contains("reasoning") { liveBuf[sid, default: (text: "", reasoning: "")].reasoning += d }
+                else { liveBuf[sid, default: (text: "", reasoning: "")].text += d }
+                scheduleFlush()
             }
             return
         }
@@ -382,8 +437,10 @@ final class PocketStore {
         guard type.hasPrefix("session.") || type.hasPrefix("message.") else { return }
         switch type {
         case "session.idle", "session.execution.succeeded", "session.execution.failed":
+            flushLive()
             if let sid {
                 activeIDs.remove(sid)
+                liveBuf[sid] = nil
                 liveText[sid] = ""
                 liveReasoning[sid] = ""
             }

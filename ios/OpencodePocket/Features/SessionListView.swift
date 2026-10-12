@@ -162,7 +162,7 @@ struct BlinkingDot: View {
             .opacity(blink ? (on ? 1 : 0.2) : 1)
             .onAppear {
                 guard blink else { return }
-                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) { on = true }
+                withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) { on = true }
             }
     }
 }

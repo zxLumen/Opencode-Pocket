@@ -1,6 +1,8 @@
 import SwiftUI
 import UIKit
 
+private let bottomID = "bottom"
+
 private struct TopYKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
@@ -61,7 +63,6 @@ struct SessionDetailView: View {
     @State private var viewportHeight: CGFloat = 0
 
     private let pageSize = 25
-    private let bottomID = "bottom"
 
     private var atBottom: Bool {
         guard viewportHeight > 0, contentHeight > 0 else { return true }
@@ -75,15 +76,13 @@ struct SessionDetailView: View {
     private var questions: [PendingQuestion] { store.pendingQuestions.filter { $0.sessionID == sessionID } }
     private var forms: [FormInfo] { store.pendingForms.filter { $0.sessionID == sessionID } }
     private var isRunning: Bool { store.activeIDs.contains(sessionID) }
-    private var live: String { store.liveText[sessionID] ?? "" }
-    private var liveR: String { store.liveReasoning[sessionID] ?? "" }
     private var queued: String? { store.queued[sessionID] }
     private var visibleMessages: [Message] { messages.filter { $0.type != "synthetic" } }
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
-                ScrollView { timeline }
+                ScrollView { timeline(proxy) }
                     .coordinateSpace(name: "scroll")
                     .scrollDismissesKeyboard(.immediately)
                     .simultaneousGesture(TapGesture().onEnded { dismissKeyboard() })
@@ -106,7 +105,6 @@ struct SessionDetailView: View {
                         if let id = bottomAnchorID() { reanchor(proxy, id) }
                     }
                     .onChange(of: messages.count) { _, _ in if atBottom { scrollToBottom(proxy) } }
-                    .onChange(of: live) { _, _ in if atBottom { scrollToBottom(proxy) } }
                     .onChange(of: store.refreshTick) { _, _ in Task { await refreshNewest(); if atBottom { scrollToBottom(proxy) } } }
                     .task {
                         seedFromCache()
@@ -121,9 +119,10 @@ struct SessionDetailView: View {
                             didInitialScroll = true
                         }
                         while !Task.isCancelled {
-                            try? await Task.sleep(nanoseconds: 2_000_000_000)
+                            try? await Task.sleep(nanoseconds: 4_000_000_000)
                             if Task.isCancelled { break }
-                            await refreshNewest()
+                            // 仅在运行中兜底；空闲时靠 SSE 事件（refreshTick）驱动，避免空转请求。
+                            if store.activeIDs.contains(sessionID) { await refreshNewest() }
                         }
                     }
             }
@@ -146,7 +145,7 @@ struct SessionDetailView: View {
     // MARK: - Timeline
 
     @ViewBuilder
-    private var timeline: some View {
+    private func timeline(_ proxy: ScrollViewProxy) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             topSentinel
             if loadingOlder { loadingRow }
@@ -154,7 +153,7 @@ struct SessionDetailView: View {
             errorBanners
             messageList
             queuedBubble
-            liveSections
+            LiveStreamView(sessionID: sessionID, proxy: proxy, isAtBottom: { atBottom })
             pendingCards
             bottomSentinel
         }
@@ -223,16 +222,6 @@ struct SessionDetailView: View {
             }
             .opacity(0.5)
             .id("queued")
-        }
-    }
-
-    @ViewBuilder
-    private var liveSections: some View {
-        if !live.isEmpty { LiveBubble(text: live).id("live") }
-        if !liveR.isEmpty {
-            ExpandableSection(title: "实时思考") {
-                MarkdownText(text: liveR).font(.caption).foregroundStyle(.secondary)
-            }
         }
     }
 
@@ -349,13 +338,42 @@ struct SessionDetailView: View {
     }
 }
 
+/// 只观察实时流式内容：token 更新时仅此子视图重绘，不会牵连历史消息与整个详情页。
+private struct LiveStreamView: View {
+    @Environment(PocketStore.self) private var store
+    let sessionID: String
+    let proxy: ScrollViewProxy
+    let isAtBottom: () -> Bool
+
+    private var live: String { store.liveText[sessionID] ?? "" }
+    private var liveR: String { store.liveReasoning[sessionID] ?? "" }
+
+    var body: some View {
+        Group {
+            if !live.isEmpty { LiveBubble(text: live).id("live") }
+            if !liveR.isEmpty {
+                ExpandableSection(title: "实时思考") {
+                    MarkdownText(text: liveR).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .onChange(of: live) { _, _ in
+            // 合流后每次写入最多触发一次；仅在贴底时跟随滚动。
+            if isAtBottom() { proxy.scrollTo(bottomID, anchor: .bottom) }
+        }
+    }
+}
+
 struct LiveBubble: View {
     let text: String
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Label("实时", systemImage: "dot.radiowaves.left.and.right")
                 .font(.caption2).foregroundStyle(.green)
-            MarkdownText(text: text)
+            // 流式期间用纯文本渲染，避免逐 token 全量 Markdown 解析（O(n²)）。
+            Text(text)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

@@ -3,7 +3,7 @@ import Foundation
 /// Streams opencode SSE events from `GET /api/event`.
 enum EventStream {
     static func connect(base: URL, authorization: String) -> AsyncStream<OpenCodeEvent> {
-        AsyncStream { continuation in
+        AsyncStream(bufferingPolicy: .bufferingNewest(2000)) { continuation in
             let task = Task {
                 var attempts = 0
                 while !Task.isCancelled {
@@ -15,8 +15,10 @@ enum EventStream {
                     }
                     if Task.isCancelled { break }
                     attempts += 1
-                    let backoff = min(pow(2.0, Double(max(attempts - 1, 0))), 10)
-                    try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+                    // 退避上限 30s，并加抖动，弱网时避免持续冲击。
+                    let backoff = min(pow(2.0, Double(max(attempts - 1, 0))), 30)
+                    let jitter = Double.random(in: 0...0.5)
+                    try? await Task.sleep(nanoseconds: UInt64((backoff + jitter) * 1_000_000_000))
                 }
                 continuation.finish()
             }
