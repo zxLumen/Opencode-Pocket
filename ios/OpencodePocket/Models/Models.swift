@@ -203,6 +203,10 @@ struct OpenCodeEvent: Decodable, Sendable {
             if let err = try? data.nestedContainer(keyedBy: Keys.self, forKey: .error) {
                 errorMessage = try? err.decodeIfPresent(String.self, forKey: .message)
             }
+            // error 也可能就是纯字符串（如 "Rate limit exceeded."）
+            if errorMessage == nil, let s = try? data.decodeIfPresent(String.self, forKey: .error), !s.isEmpty {
+                errorMessage = s
+            }
         }
     }
 }

@@ -78,7 +78,7 @@ struct ComposerView: View {
                 }
                 .disabled(uploading)
 
-                TextField("输入指令…", text: $text, axis: .vertical)
+                TextField("输入指令…（留空点发送＝继续）", text: $text, axis: .vertical)
                     .lineLimit(1...5)
                     .font(.body)
 

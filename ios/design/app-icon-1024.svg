@@ -1,16 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <!--
     Opencode-Pocket app icon — 1024×1024（不透明，iOS 会自动加圆角）
-    几何/配色 1:1 复刻 opencode 官方 iOS 图标（apple-touch-icon-v3.png，180×180 采样还原）：
-      背景 #131010  /  白色竖矩形  /  顶部暗槽  /  下方灰块 #5A5858
+    基于 opencode 官方 iOS 图标的「浅底 + 圆角」调整版：
+      底 #F1ECEC  /  主块 #211E1E（rx=72）  /  暗槽 #F1ECEC  /  灰块 #656363
 
     重新生成图标：
       rsvg-convert -w 1024 -h 1024 \
         -o OpencodePocket/Assets.xcassets/AppIcon.appiconset/icon-1024.png \
         ios/design/app-icon-1024.svg
   -->
-  <rect width="1024" height="1024" fill="#131010"/>
-  <rect x="256" y="193" width="512" height="637" fill="#FFFFFF"/>
-  <rect x="387" y="324" width="250" height="125" fill="#131010"/>
-  <rect x="387" y="449" width="250" height="250" fill="#5A5858"/>
+  <rect width="1024" height="1024" fill="#F1ECEC"/>
+  <rect x="256" y="193" width="512" height="637" rx="72" fill="#211E1E"/>
+  <rect x="387" y="324" width="250" height="125" fill="#F1ECEC"/>
+  <rect x="387" y="449" width="250" height="250" fill="#656363"/>
 </svg>

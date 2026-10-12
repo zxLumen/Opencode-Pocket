@@ -25,6 +25,11 @@ enum Prefs {
         get { Set(UserDefaults.standard.stringArray(forKey: "opencode.pocket.favModels") ?? []) }
         set { UserDefaults.standard.set(Array(newValue), forKey: "opencode.pocket.favModels") }
     }
+    /// 上次执行失败的原因（按 sessionID）。持久化后，重启 App 也能看到为什么失败。
+    static var sessionErrors: [String: String] {
+        get { (UserDefaults.standard.dictionary(forKey: "opencode.pocket.sessErrors") as? [String: String]) ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: "opencode.pocket.sessErrors") }
+    }
 }
 
 struct MessagesResponse: Decodable {
@@ -63,7 +68,16 @@ final class PocketStore {
     var pendingForms: [FormInfo] = []
     var liveText: [String: String] = [:]
     var liveReasoning: [String: String] = [:]
-    var sessionErrors: [String: String] = [:]
+    var sessionErrors: [String: String] = Prefs.sessionErrors {
+        didSet {
+            // 防止无限增长：只保留最近 80 条
+            if sessionErrors.count > 80 {
+                let keep = Set(sessionErrors.sorted { $0.key < $1.key }.suffix(80).map(\.key))
+                sessionErrors = sessionErrors.filter { keep.contains($0.key) }
+            }
+            Prefs.sessionErrors = sessionErrors
+        }
+    }
     var lastError: String?
     var serverVersion: String?
     var offline = false
@@ -149,6 +163,20 @@ final class PocketStore {
     static func friendly(_ error: Error) -> String {
         if isNetwork(error) { return "连接中断：Mac 可能已休眠/离线，或网络不可用。正在自动重连…" }
         return error.localizedDescription
+    }
+
+    /// 把服务端报的失败原因翻成人话，并附上可操作建议。
+    static func friendlyFailure(_ raw: String?) -> String {
+        let s = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.isEmpty { return "执行失败（服务端未返回原因）" }
+        let l = s.lowercased()
+        if l.contains("rate limit") || l.contains("too many request") || s.contains("限流") || s.contains("配额") || l.contains("quota") {
+            return "模型限流（Rate limit），稍后重试或换个模型：\(s)"
+        }
+        if l.contains("unauthorized") || l.contains("401") || l.contains("api key") {
+            return "模型鉴权失败，去「提供商」重新连接 API Key：\(s)"
+        }
+        return s
     }
 
     private func markOfflineIfNetwork(_ error: Error) {
@@ -431,7 +459,7 @@ final class PocketStore {
 
         // 执行失败 / 出错：记录错误，供会话内红字提示
         if type.contains("execution.failed") || type.contains("step.failed") || type == "session.error" {
-            if let sid { sessionErrors[sid] = event.errorMessage ?? "执行失败" }
+            if let sid { sessionErrors[sid] = Self.friendlyFailure(event.errorMessage) }
         }
 
         guard type.hasPrefix("session.") || type.hasPrefix("message.") else { return }
