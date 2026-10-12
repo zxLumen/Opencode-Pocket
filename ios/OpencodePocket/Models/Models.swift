@@ -89,7 +89,6 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     var id: String
     var type: String?
     var agent: String?
-    var previous: String?
     var model: ModelRef?
     var time: TimeInfo?
     var content: [Part]?

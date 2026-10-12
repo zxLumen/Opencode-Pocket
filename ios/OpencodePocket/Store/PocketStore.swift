@@ -376,10 +376,31 @@ final class PocketStore {
         if let cursor, !cursor.isEmpty { q.append(URLQueryItem(name: "cursor", value: cursor)) }
         do {
             let r = try await c.getData("/api/session/\(sessionID)/message", query: q, as: MessagesResponse.self)
+            if lastError?.hasPrefix("消息解析失败") == true { lastError = nil }
             return (r.data, r.cursor?.previous)
         } catch {
             markOfflineIfNetwork(error)
+            // 解码失败绝不能静默：否则详情页会「卡住不动」，
+            // 表现为报错/新内容永远刷不出来（历史上踩过一次）。
+            if !Self.isNetwork(error) {
+                lastError = "消息解析失败：\(Self.decodeSummary(error))"
+            }
             return ([], nil)
+        }
+    }
+
+    /// 把 DecodingError 压成一句能看懂的说明（含出错字段路径）。
+    private static func decodeSummary(_ error: Error) -> String {
+        guard let e = error as? DecodingError else { return "\(error)" }
+        func path(_ p: [CodingKey]) -> String {
+            p.map { $0.intValue.map { "[\($0)]" } ?? $0.stringValue }.joined(separator: ".")
+        }
+        switch e {
+        case .typeMismatch(_, let ctx):  return "字段 \(path(ctx.codingPath)) 类型不匹配"
+        case .valueNotFound(_, let ctx): return "字段 \(path(ctx.codingPath)) 缺失值"
+        case .keyNotFound(let k, _):     return "缺少字段 \(k.stringValue)"
+        case .dataCorrupted(let ctx):    return "数据损坏 @ \(path(ctx.codingPath))"
+        @unknown default:                return "\(error)"
         }
     }
 
