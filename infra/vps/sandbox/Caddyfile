@@ -3,7 +3,8 @@
 # 三层职责都在本文件:
 #   ① 访客锁定 —— 文档请求只认唯一会话,其余 302 回工作台;自建外壳(注入隐藏与守卫)
 #   ② 工作台 —— GET / 返回双栏工作台(会话 | 网站实时预览);入口不再直接是会话
-#   ③ 模型封锁 —— 访客看不到、也换不了模型(读接口净空 + 写接口 403 + 前端隐藏)
+#   ③ 模型封锁 —— 访客看不到可选模型、也换不了模型(读接口净化成「仅网关默认」+
+#      写接口 403 + 前端隐藏 Select model 按钮;保留 default 映射,发消息不被前端拦)
 #
 # 为什么单独一个 Caddy:访客锁定的配置完全属于本仓库,与博客的 Caddyfile 互不影响
 # (博客侧只有 3 行固定转发)。本服务不发布端口,由博客栈的 Caddy 做 TLS 后转发到
@@ -46,12 +47,53 @@
 		}
 	}
 
-	# ③ 模型「查看」面净空:不再暴露供应商 / 模型清单(回空壳,避免前端报错)
+	# ③ 模型「查看」面净化:只暴露「博客 AI 网关」这一个 provider 与其默认模型
+	#    (剥掉 options.apiKey / 内网地址之外的信息;保留 default 映射 → 前端「默认模型」
+	#    非空,发送消息不再被 SPA 拦截;all 只留 zxgw → 弹窗无可选模型)。
 	@modelProvider path_regexp ^/(api/)?provider(/|$)
 	handle @modelProvider {
 		@get method GET HEAD
 		handle @get {
-			respond `{"all":[],"default":{},"connected":[]}` 200
+			respond <<JSON
+			{
+			  "all": [
+			    {
+			      "id": "zxgw",
+			      "name": "博客 AI 网关",
+			      "source": "config",
+			      "env": [],
+			      "options": { "baseURL": "http://app:3000/api/ai/v1" },
+			      "models": {
+			        "gateway-default": {
+			          "id": "gateway-default",
+			          "providerID": "zxgw",
+			          "api": { "id": "gateway-default", "url": "", "npm": "@ai-sdk/openai-compatible" },
+			          "name": "网关默认模型",
+			          "family": "",
+			          "capabilities": {
+			            "temperature": false,
+			            "reasoning": false,
+			            "attachment": false,
+			            "toolcall": true,
+			            "input": { "text": true, "audio": false, "image": false, "video": false, "pdf": false },
+			            "output": { "text": true, "audio": false, "image": false, "video": false, "pdf": false },
+			            "interleaved": false
+			          },
+			          "cost": { "input": 0, "output": 0, "cache": { "read": 0, "write": 0 } },
+			          "limit": { "context": 0, "output": 0 },
+			          "status": "active",
+			          "options": {},
+			          "headers": {},
+			          "release_date": "",
+			          "variants": {}
+			        }
+			      }
+			    }
+			  ],
+			  "default": { "zxgw": "gateway-default" },
+			  "connected": ["zxgw"]
+			}
+			JSON 200
 		}
 		handle {
 			respond 403
@@ -60,6 +102,12 @@
 	@modelListV2 path /api/model
 	handle @modelListV2 {
 		respond `{"location":{},"data":[]}` 200
+	}
+	# /api/model/default 服务端没有该端点(会落 SPA index.html),补一个合法响应,
+	# 防 SPA 的 v2 数据分支把返回体当 JSON 解析时崩掉。
+	@modelDefaultV2 path /api/model/default
+	handle @modelDefaultV2 {
+		respond `{"location":{},"data":{"providerID":"zxgw","id":"gateway-default"}}` 200
 	}
 	@configProviders path /config/providers
 	handle @configProviders {
@@ -120,16 +168,23 @@
 			<script>
 			(function(){
 			var S=JSON.stringify(location.pathname.replace(/\/+$/,""));
-			var SEL="header,aside,[data-slot=user-message-meta],[data-slot=text-part-meta],button:has(svg[data-component=provider-icon])";
+			var SEL="header,aside,[data-slot=user-message-meta],[data-slot=text-part-meta],button:has(svg[data-component=provider-icon]),button[data-action=prompt-model]";
 			var code="(function(){var S="+S+";"+
+			"var AG='zx-sandbox-agent';"+
 			"var SEL="+JSON.stringify(SEL)+";"+
 			"function hide(){try{var e=document.querySelectorAll(SEL);for(var i=0;i<e.length;i++)e[i].style.setProperty('display','none','important');}catch(err){}}"+
+			"function ag(){try{var m=document.querySelector('button[data-action=\"prompt-model\"]');if(!m||!m.parentElement)return;var host=m.parentElement,cur=localStorage.getItem(AG)||'plan',bar=document.querySelector('[data-zx-ag]');if(bar&&bar.dataset.v===cur)return;if(!bar){bar=document.createElement('div');bar.setAttribute('data-zx-ag','1');host.appendChild(bar);}bar.dataset.v=cur;bar.textContent='';['plan','build'].forEach(function(a){var b=document.createElement('button');b.textContent=a==='plan'?'Plan':'Build';if(a===cur)b.className='on';b.addEventListener('click',function(){try{fetch('/api/session/ses_guest/agent',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent:a})});}catch(err){}localStorage.setItem(AG,a);bar.dataset.v='';ag();});bar.appendChild(b);});}catch(err){}}"+
 			"function guard(){var p=location.pathname;if((p==='/'||p==='/global'||p==='/global/')&&S)location.replace(S);}"+
-			"new MutationObserver(hide).observe(document.documentElement,{childList:true,subtree:true});"+
-			"document.addEventListener('DOMContentLoaded',hide);hide();guard();setInterval(guard,800);"+
+			"function run(){hide();ag();}"+
+			"new MutationObserver(run).observe(document.documentElement,{childList:true,subtree:true});"+
+			"document.addEventListener('DOMContentLoaded',run);try{fetch('/api/session/ses_guest/agent',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent:localStorage.getItem(AG)||'plan'})});}catch(err){}run();guard();setInterval(guard,800);"+
 			"document.addEventListener('keydown',function(ev){if(!(ev.metaKey||ev.ctrlKey))return;var k=(ev.key||'').toLowerCase();if(k==='k'||k==='n'||k===','||k==='p')ev.preventDefault();},true);"+
 			"})();";
-			var inject="<style>"+SEL+"{display:none!important}</style><scr"+"ipt>"+code+"<\/scr"+"ipt>";
+			var inject="<style>"+SEL+"{display:none!important}"+
+			"[data-zx-ag]{display:inline-flex;gap:4px;margin:0 2px;padding:2px;align-items:center}"+
+			"[data-zx-ag] button{font:12px/1.2 system-ui;color:inherit;background:transparent;border:1px solid rgba(128,128,128,.4);border-radius:999px;padding:2px 10px;cursor:pointer}"+
+			"[data-zx-ag] button.on{background:#3574f0;border-color:#3574f0;color:#fff}"+
+			"</style><scr"+"ipt>"+code+"<\/scr"+"ipt>";
 			var html="";
 			try{var x=new XMLHttpRequest();x.open("GET","/__shell",false);x.send();html=x.responseText;}catch(err){}
 			if(html&&html.indexOf("</head>")>=0){document.write(html.replace("</head>",inject+"</head>"));}
@@ -148,11 +203,18 @@
 
 	# ⑦ 写入白名单:非 GET/HEAD/OPTIONS 仅放行固定会话下的子路径,其余 403
 	#    (建会话 POST /session、改配置 PATCH /config、加项目 POST /project/* 等全被挡;
-	#     改模型 POST /session/<id>/model 已在 ① 全阶段封禁)
+	#     改模型 POST /session/<id>/model 已在 ① 全阶段封禁;
+	#     仅额外放行 Plan/Build 切换:POST /api/session/<id>/agent)
 	@write not method GET HEAD OPTIONS
 	@allowed path_regexp ^/session/{$PLAYGROUND_SESSION_ID:ses_guest}/
+	@agentSwitch path_regexp ^/api/session/{$PLAYGROUND_SESSION_ID:ses_guest}/agent$
 	handle @write {
 		handle @allowed {
+			reverse_proxy opencode-play:4096 {
+				flush_interval -1
+			}
+		}
+		handle @agentSwitch {
 			reverse_proxy opencode-play:4096 {
 				flush_interval -1
 			}
