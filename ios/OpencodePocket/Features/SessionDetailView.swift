@@ -20,6 +20,10 @@ private struct RowFrameKey: PreferenceKey {
     }
 }
 
+private func dismissKeyboard() {
+    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+}
+
 struct ExpandableSection<Content: View>: View {
     let title: String
     @ViewBuilder var content: () -> Content
@@ -52,8 +56,6 @@ struct SessionDetailView: View {
     @State private var didInitialScroll = false
     @State private var showModels = false
     @State private var rowFrames: [String: CGRect] = [:]
-
-    // 偏移量 + 高度，用于精确判定"是否在底部"（iOS17 可用）
     @State private var topMinY: CGFloat = 0
     @State private var contentHeight: CGFloat = 0
     @State private var viewportHeight: CGFloat = 0
@@ -75,132 +77,56 @@ struct SessionDetailView: View {
     private var isRunning: Bool { store.activeIDs.contains(sessionID) }
     private var live: String { store.liveText[sessionID] ?? "" }
     private var liveR: String { store.liveReasoning[sessionID] ?? "" }
+    private var queued: String? { store.queued[sessionID] }
     private var visibleMessages: [Message] { messages.filter { $0.type != "synthetic" } }
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Color.clear
-                            .frame(height: 1)
-                            .background(GeometryReader { g in
-                                Color.clear.preference(key: TopYKey.self, value: g.frame(in: .named("scroll")).minY)
-                            })
-
-                        if loadingOlder {
-                            HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
-                        }
-
-                        header
-
-                        if let err = store.sessionErrors[sessionID], !err.isEmpty {
-                            Label(err, systemImage: "exclamationmark.octagon")
-                                .font(.caption).foregroundStyle(.red)
-                                .padding(8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                        } else if session?.outcome == "failed" {
-                            Label("上次执行失败（可继续对话重试）", systemImage: "exclamationmark.octagon")
-                                .font(.caption).foregroundStyle(.red)
-                                .padding(8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-                        }
-
-                        if let err = store.lastError, !err.isEmpty {
-                            Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
-                        }
-
-                        ForEach(visibleMessages) { message in
-                            MessageRow(message: message)
-                                .id(message.id)
-                                .background(GeometryReader { g in
-                                    Color.clear.preference(key: RowFrameKey.self,
-                                                           value: [message.id: g.frame(in: .named("scroll"))])
-                                })
-                        }
-
-                        if let q = store.queued[sessionID], !q.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("你 · 发送中…").font(.caption2.bold()).foregroundStyle(.blue)
-                                Text(q)
-                            }
-                            .opacity(0.5)
-                            .id("queued")
-                        }
-
-                        if !live.isEmpty { LiveBubble(text: live).id("live") }
-
-                        if !liveR.isEmpty {
-                            ExpandableSection(title: "实时思考") {
-                                MarkdownText(text: liveR).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-
-                        ForEach(permissions) { PermissionCard(permission: $0) }
-                        ForEach(questions) { QuestionCard(question: $0) }
-                        ForEach(forms) { FormCard(form: $0) }
-
-                        Color.clear.frame(height: 1).id(bottomID)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.top, 12)
-                    .padding(.bottom, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                ScrollView { timeline }
+                    .coordinateSpace(name: "scroll")
+                    .scrollDismissesKeyboard(.immediately)
+                    .simultaneousGesture(TapGesture().onEnded { dismissKeyboard() })
                     .background(GeometryReader { g in
-                        Color.clear.preference(key: ContentHKey.self, value: g.size.height)
+                        Color.clear.preference(key: ViewHKey.self, value: g.size.height)
                     })
-                }
-                .coordinateSpace(name: "scroll")
-                .scrollDismissesKeyboard(.immediately)
-                .simultaneousGesture(TapGesture().onEnded { dismissKeyboard() })
-                .background(GeometryReader { g in
-                    Color.clear.preference(key: ViewHKey.self, value: g.size.height)
-                })
-                .onPreferenceChange(TopYKey.self) { topMinY = $0 }
-                .onPreferenceChange(ContentHKey.self) { contentHeight = $0 }
-                .onPreferenceChange(ViewHKey.self) { viewportHeight = $0 }
-                .onPreferenceChange(RowFrameKey.self) { frames in
-                    rowFrames = frames
-                }
-                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                    // 立即用"变化前"的 rowFrames 计算输入框上方那一行
-                    if let id = bottomAnchorID() { reanchor(proxy, id) }
-                }
-                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                    if let id = bottomAnchorID() { reanchor(proxy, id) }
-                }
-                .onPreferenceChange(TopYKey.self) { minY in
-                    // 仅当首次定位到底完成后，才允许"上滑加载更早"（防止进入瞬间误触发导致跳到顶部）
-                    if didInitialScroll, minY > -60, olderCursor?.isEmpty == false, !loadingOlder {
-                        Task { await loadOlder(proxy) }
-                    }
-                }
-                .onChange(of: messages.count) { _, _ in if atBottom { scrollToBottom(proxy) } }
-                .onChange(of: live) { _, _ in if atBottom { scrollToBottom(proxy) } }
-                .onChange(of: store.refreshTick) { _, _ in Task { await refreshNewest(); if atBottom { scrollToBottom(proxy) } } }
-                .task {
-                    seedFromCache()
-                    store.markViewed(sessionID)
-                    if messages.isEmpty { await reload() } else { await refreshNewest() }
-                    // 首次进入：多次重试确保到底（覆盖网络/布局时序）
-                    if !didInitialScroll {
-                        for _ in 0..<8 {
-                            scrollToBottom(proxy, animated: false)
-                            try? await Task.sleep(nanoseconds: 80_000_000)
-                            if didInitialScroll { break }
+                    .onPreferenceChange(TopYKey.self) { topMinY = $0 }
+                    .onPreferenceChange(ContentHKey.self) { contentHeight = $0 }
+                    .onPreferenceChange(ViewHKey.self) { viewportHeight = $0 }
+                    .onPreferenceChange(RowFrameKey.self) { rowFrames = $0 }
+                    .onPreferenceChange(TopYKey.self) { minY in
+                        if didInitialScroll, minY > -60, olderCursor?.isEmpty == false, !loadingOlder {
+                            Task { await loadOlder(proxy) }
                         }
-                        didInitialScroll = true
                     }
-                    while !Task.isCancelled {
-                        try? await Task.sleep(nanoseconds: 2_000_000_000)
-                        if Task.isCancelled { break }
-                        await refreshNewest()   // 只刷新，不主动滚动（避免"过一会儿回底"）
+                    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                        if let id = bottomAnchorID() { reanchor(proxy, id) }
                     }
-                }
+                    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                        if let id = bottomAnchorID() { reanchor(proxy, id) }
+                    }
+                    .onChange(of: messages.count) { _, _ in if atBottom { scrollToBottom(proxy) } }
+                    .onChange(of: live) { _, _ in if atBottom { scrollToBottom(proxy) } }
+                    .onChange(of: store.refreshTick) { _, _ in Task { await refreshNewest(); if atBottom { scrollToBottom(proxy) } } }
+                    .task {
+                        seedFromCache()
+                        store.markViewed(sessionID)
+                        if messages.isEmpty { await reload() } else { await refreshNewest() }
+                        if !didInitialScroll {
+                            for _ in 0..<8 {
+                                scrollToBottom(proxy, animated: false)
+                                try? await Task.sleep(nanoseconds: 80_000_000)
+                                if didInitialScroll { break }
+                            }
+                            didInitialScroll = true
+                        }
+                        while !Task.isCancelled {
+                            try? await Task.sleep(nanoseconds: 2_000_000_000)
+                            if Task.isCancelled { break }
+                            await refreshNewest()
+                        }
+                    }
             }
-
             ComposerView(sessionID: sessionID)
         }
         .navigationTitle(session?.displayTitle ?? "会话")
@@ -217,6 +143,108 @@ struct SessionDetailView: View {
         }
     }
 
+    // MARK: - Timeline
+
+    @ViewBuilder
+    private var timeline: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            topSentinel
+            if loadingOlder { loadingRow }
+            header
+            errorBanners
+            messageList
+            queuedBubble
+            liveSections
+            pendingCards
+            bottomSentinel
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(GeometryReader { g in
+            Color.clear.preference(key: ContentHKey.self, value: g.size.height)
+        })
+    }
+
+    private var topSentinel: some View {
+        Color.clear
+            .frame(height: 1)
+            .background(GeometryReader { g in
+                Color.clear.preference(key: TopYKey.self, value: g.frame(in: .named("scroll")).minY)
+            })
+    }
+
+    private var bottomSentinel: some View {
+        Color.clear.frame(height: 1).id(bottomID)
+    }
+
+    private var loadingRow: some View {
+        HStack { Spacer(); ProgressView().controlSize(.small); Spacer() }
+    }
+
+    @ViewBuilder
+    private var errorBanners: some View {
+        if let err = store.sessionErrors[sessionID], !err.isEmpty {
+            errorBanner(err)
+        } else if session?.outcome == "failed" {
+            errorBanner("上次执行失败（可继续对话重试）")
+        }
+        if let err = store.lastError, !err.isEmpty {
+            Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
+        }
+    }
+
+    private func errorBanner(_ text: String) -> some View {
+        Label(text, systemImage: "exclamationmark.octagon")
+            .font(.caption).foregroundStyle(.red)
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private var messageList: some View {
+        ForEach(visibleMessages) { message in
+            MessageRow(message: message)
+                .id(message.id)
+                .background(GeometryReader { g in
+                    Color.clear.preference(key: RowFrameKey.self, value: [message.id: g.frame(in: .named("scroll"))])
+                })
+        }
+    }
+
+    @ViewBuilder
+    private var queuedBubble: some View {
+        if let q = queued, !q.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("你 · 发送中…").font(.caption2.bold()).foregroundStyle(.blue)
+                Text(q)
+            }
+            .opacity(0.5)
+            .id("queued")
+        }
+    }
+
+    @ViewBuilder
+    private var liveSections: some View {
+        if !live.isEmpty { LiveBubble(text: live).id("live") }
+        if !liveR.isEmpty {
+            ExpandableSection(title: "实时思考") {
+                MarkdownText(text: liveR).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var pendingCards: some View {
+        ForEach(permissions) { PermissionCard(permission: $0) }
+        ForEach(questions) { QuestionCard(question: $0) }
+        ForEach(forms) { FormCard(form: $0) }
+    }
+
+    // MARK: - Scroll helpers
+
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
         if animated { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) } }
         else { proxy.scrollTo(bottomID, anchor: .bottom) }
@@ -229,13 +257,14 @@ struct SessionDetailView: View {
         return visible.max { $0.value.minY < $1.value.minY }?.key
     }
 
-    /// 键盘开/合：把"输入框上方那一行"重新锚到输入框上方，使内容随输入框上下移动。
     private func reanchor(_ proxy: ScrollViewProxy, _ id: String) {
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 120_000_000)   // 等键盘/布局收缩(回弹)完成
+            try? await Task.sleep(nanoseconds: 120_000_000)
             withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) }
         }
     }
+
+    // MARK: - Data
 
     private func seedFromCache() {
         guard messages.isEmpty, let cached = store.messageCache[sessionID], !cached.isEmpty else { return }
@@ -256,7 +285,6 @@ struct SessionDetailView: View {
         persist()
     }
 
-    /// 拉取最新一页并**按 id 合并**；内容无变化则不重排（减少抖动）。
     private func refreshNewest() async {
         let page = await store.loadMessages(sessionID: sessionID, limit: pageSize)
         var byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -264,7 +292,6 @@ struct SessionDetailView: View {
         let merged = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
         if merged != messages { messages = merged; persist() }
         if olderCursor == nil, let prev = page.previous { olderCursor = prev; persist() }
-        // 服务器已出现该用户消息 -> 清掉"发送中"气泡
         if let q = store.queued[sessionID],
            messages.contains(where: { $0.type == "user" && (($0.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == q) }) {
             store.queued[sessionID] = nil
@@ -281,13 +308,14 @@ struct SessionDetailView: View {
         messages = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
         olderCursor = page.previous
         persist()
-        // 保持位置：把原来顶部那条重新锚到顶部，避免前插导致跳动
         if let anchor {
             try? await Task.sleep(nanoseconds: 30_000_000)
             proxy.scrollTo(anchor, anchor: .top)
         }
         loadingOlder = false
     }
+
+    // MARK: - Header / menus
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
