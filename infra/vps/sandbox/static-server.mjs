@@ -17,8 +17,8 @@ import { connect as netConnect } from "node:net";
 
 const PORT = Number(process.env.SANDBOX_HELPER_PORT || 47311);
 const WORKSPACE = "/workspace";
-const APP_DIST = "/srv/app-dist";
-const HUB_FILE = "/srv/hub.html";
+const APP_DIST = process.env.SANDBOX_APP_DIST || "/srv/app-dist";
+const HUB_FILE = process.env.SANDBOX_HUB_FILE || "/srv/hub.html";
 const SESSION_ID = process.env.PLAYGROUND_SESSION_ID || "ses_guest";
 const UPSTREAM = process.env.SANDBOX_UPSTREAM || "http://127.0.0.1:4096";
 // opencode v2.0.x 绑 0.0.0.0 时强制 Basic 鉴权;本服务直连容器内 127.0.0.1:4096,
@@ -95,13 +95,14 @@ async function serveSw(req, res) {
 // 会话详情/更改面板」等入口,并拦掉管理类键位与斜杠命令,注入 Plan/Build 切换。
 const SHELL_CSS = [
   'header,aside,[data-slot=user-message-meta],[data-slot=text-part-meta],[data-slot="tabs"]{display:none!important}',
+  // 窄栏下的「Session | Changes | More...」分段条(会点开更改/更多菜单)——整条隐藏
+  '[aria-label="Session view"]{display:none!important}',
   'button[data-action="composer-model"],button[aria-label="Choose model variant"],button[aria-label="More options"],button[aria-label="Toggle review"],button[aria-label="Session details"],button[aria-label="View context usage"],button[data-component="icon-button-v2"][aria-haspopup="true"]:not([data-action]){display:none!important}',
   '[class*="md:max-w-200"],[class*="2xl:max-w-[1000px]"]{max-width:none!important}',
   '[data-zx-ag]{display:inline-flex;gap:4px;margin:0 2px;padding:2px;align-items:center}',
   '[data-zx-ag] button{font:12px/1.2 system-ui;color:inherit;background:transparent;border:1px solid rgba(128,128,128,.4);border-radius:999px;padding:2px 10px;cursor:pointer}',
   '[data-zx-ag] button.on{background:#3574f0;border-color:#3574f0;color:#fff}',
   '[data-sonner-toaster],[data-sonner-toast]{display:none!important}',
-  '[data-component="session-turn"]{content-visibility:auto;contain-intrinsic-size:auto 320px}',
 ].join("");
 
 const SHELL_CLIENT = `(function(){
@@ -290,6 +291,27 @@ async function serveSanitizedModelDefault(res, search) {
   return json(res, body);
 }
 
+// 会话历史条数上限:访客共享会话会无限累积(实测 170+ 条),时间线虚拟滚动在向上翻页时
+// 反复测高 → 视觉上「被往下拉」。这里做**非破坏性**截断:只让 SPA 拿到最近 N 条、且不再
+// 向更早翻页(清空 next 游标);服务端数据不动。
+const HISTORY_LIMIT = Number(process.env.PLAYGROUND_HISTORY_LIMIT || 40);
+async function serveCappedMessages(req, res, pathname, search) {
+  const params = new URLSearchParams(search || "");
+  if (params.has("cursor")) return json(res, { data: [], cursor: { previous: null, next: null } });
+  params.set("limit", String(HISTORY_LIMIT));
+  if (!params.has("order")) params.set("order", "desc");
+  let body;
+  try {
+    const r = await upstream(pathname + "?" + params.toString());
+    if (!r.ok) return send(res, r.status, "message unavailable", { "Content-Type": "text/plain; charset=utf-8" });
+    body = await r.json();
+  } catch {
+    return send(res, 503, "message unavailable", { "Content-Type": "text/plain; charset=utf-8" });
+  }
+  if (body && body.cursor) body.cursor.next = null;
+  return json(res, body);
+}
+
 async function serveHub(req, res) {
   let html;
   try {
@@ -430,6 +452,10 @@ const server = createServer(async (req, res) => {
   // 「改模型」:忽略请求体,强制网关默认模型(见 serveForcedModel)
   if (req.method === "POST" && /^\/api\/session\/[^/]+\/model$/.test(pathname))
     return serveForcedModel(req, res, pathname, url.search);
+
+  // 会话历史:截断为最近 N 条、不再向更早翻页(见 serveCappedMessages)
+  if (req.method === "GET" && /^\/api\/session\/[^/]+\/message$/.test(pathname))
+    return serveCappedMessages(req, res, pathname, url.search);
 
   if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "method not allowed");
   if (pathname === "/__hub") return serveHub(req, res);

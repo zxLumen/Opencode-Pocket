@@ -68,6 +68,11 @@
 			respond 403
 		}
 	}
+	# 会话历史:交给辅助服务截断为最近 N 条(不再向更早翻页),缓解长会话的滚动抖动
+	@sessionMessages path_regexp ^/api/session/[^/]+/message$
+	handle @sessionMessages {
+		import to_helper
+	}
 
 	# ② 网站预览 + 访客后端反代(全部方法透传到辅助服务)
 	@preview path_regexp ^/preview(/|$)

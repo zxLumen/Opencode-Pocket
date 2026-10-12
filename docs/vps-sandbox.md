@@ -164,7 +164,8 @@ opencode v2.0.x 绑 `0.0.0.0` 时**强制 Basic 鉴权**（不设密码则每次
 裁剪版已去掉了标题栏/标签/设置/新建会话；辅助服务在其之上再注入 `SHELL_CSS` + `SHELL_CLIENT`
 做「访客锁定」：
 
-- **隐藏残留入口**：`button[data-action="composer-model"]`（模型选择）、
+- **隐藏残留入口**：`[aria-label="Session view"]`（窄栏下的 `Session | Changes | More...`
+  分段条，会点开更改/更多菜单）、`button[data-action="composer-model"]`（模型选择）、
   `button[aria-label="Choose model variant"]`、`More options`、`Toggle review`、
   `Session details`、`View context usage` 等，以及 `[data-slot=user-message-meta]` /
   `[data-slot=text-part-meta]`（历史消息里的模型名与时长）。
@@ -179,6 +180,15 @@ opencode v2.0.x 绑 `0.0.0.0` 时**强制 Basic 鉴权**（不设密码则每次
 
 > ⚠️ 斜杠命令**只在客户端拦**：不要在边缘把 `GET /api/command` 置空——会让 SPA 的 command
 > bootstrap 抛错并弹「无法重新加载」toast。
+
+### 会话历史上限（滚动与加载）
+
+访客共享会话会无限累积（实测 170+ 条），时间线是**虚拟滚动**，向上翻页时逐行测高会让内容
+高度反复变化 → 视觉上「往上滑被往下拉」。辅助服务对 `GET /api/session/<id>/message`
+做**非破坏性截断**：首次只返回最近 `PLAYGROUND_HISTORY_LIMIT`（默认 40）条、并清空 `next`
+游标（SPA 不再向更早翻页）；带 `cursor` 的翻页请求返回空。**服务端数据不动**，只是 UI 只看
+最近一段；同时去掉外壳里对 `[data-component="session-turn"]` 的 `content-visibility`
+（与虚拟滚动叠加易致测高抖动）。
 
 ## 访客工作台（`hub.html` + `static-server.mjs`）
 

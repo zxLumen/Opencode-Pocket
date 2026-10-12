@@ -57,6 +57,8 @@ services:
       # 与容器内辅助服务各自注入,访客侧不可见。
       OPENCODE_SERVER_PASSWORD: ${PLAYGROUND_SERVER_PASSWORD:-}
       PLAYGROUND_SESSION_ID: ${PLAYGROUND_SESSION_ID:-ses_guest}
+      # UI 上保留的最近会话条数(辅助服务读取;默认 40)
+      PLAYGROUND_HISTORY_LIMIT: ${PLAYGROUND_HISTORY_LIMIT:-40}
     init: true
     user: "10001:10001"
     read_only: true
