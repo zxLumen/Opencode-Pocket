@@ -153,7 +153,8 @@ struct SessionDetailView: View {
                     })
                 }
                 .coordinateSpace(name: "scroll")
-                .scrollDismissesKeyboard(.interactively)
+                .scrollDismissesKeyboard(.immediately)
+                .simultaneousGesture(TapGesture().onEnded { dismissKeyboard() })
                 .background(GeometryReader { g in
                     Color.clear.preference(key: ViewHKey.self, value: g.size.height)
                 })
