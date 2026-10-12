@@ -58,6 +58,7 @@ struct SessionDetailView: View {
     @State private var didInitialScroll = false
     @State private var showModels = false
     @State private var rowFrames: [String: CGRect] = [:]
+    @State private var pullingToRefresh = false
     @State private var topMinY: CGFloat = 0
     @State private var contentHeight: CGFloat = 0
     @State private var viewportHeight: CGFloat = 0
@@ -94,6 +95,7 @@ struct SessionDetailView: View {
                     .onPreferenceChange(ViewHKey.self) { viewportHeight = $0 }
                     .onPreferenceChange(RowFrameKey.self) { rowFrames = $0 }
                     .onPreferenceChange(TopYKey.self) { minY in
+                        pullRefreshIfNeeded()
                         if didInitialScroll, minY > -60, olderCursor?.isEmpty == false, !loadingOlder {
                             Task { await loadOlder(proxy) }
                         }
@@ -119,10 +121,12 @@ struct SessionDetailView: View {
                             didInitialScroll = true
                         }
                         while !Task.isCancelled {
-                            try? await Task.sleep(nanoseconds: 4_000_000_000)
+                            // 运行中刷得勤一点，空闲也保持低频刷新：
+                            // 否则会话一旦变 idle/failed，详情页就永远停在报错/收尾前那一帧。
+                            let iv: UInt64 = store.activeIDs.contains(sessionID) ? 4_000_000_000 : 10_000_000_000
+                            try? await Task.sleep(nanoseconds: iv)
                             if Task.isCancelled { break }
-                            // 仅在运行中兜底；空闲时靠 SSE 事件（refreshTick）驱动，避免空转请求。
-                            if store.activeIDs.contains(sessionID) { await refreshNewest() }
+                            await refreshNewest()
                         }
                     }
             }
@@ -155,6 +159,7 @@ struct SessionDetailView: View {
             queuedBubble
             LiveStreamView(sessionID: sessionID, proxy: proxy, isAtBottom: { atBottom })
             pendingCards
+            pullFooter
             bottomSentinel
         }
         .padding(.horizontal, 14)
@@ -176,6 +181,24 @@ struct SessionDetailView: View {
 
     private var bottomSentinel: some View {
         Color.clear.frame(height: 1).id(bottomID)
+    }
+
+    /// 底部提示条：默认「上拉刷新」，触发中显示「刷新中…」。
+    @ViewBuilder
+    private var pullFooter: some View {
+        HStack(spacing: 6) {
+            if pullingToRefresh {
+                ProgressView().controlSize(.small)
+                Text("刷新中…")
+            } else {
+                Image(systemName: "arrow.up")
+                Text("上拉刷新")
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
     }
 
     private var loadingRow: some View {
@@ -233,6 +256,20 @@ struct SessionDetailView: View {
     }
 
     // MARK: - Scroll helpers
+
+    /// 底部过卷（上拉）超过阈值时触发一次刷新。
+    private func pullRefreshIfNeeded() {
+        guard didInitialScroll, !pullingToRefresh else { return }
+        let maxScroll = max(contentHeight - viewportHeight, 0)
+        let scrolled = max(-topMinY, 0)
+        guard scrolled - maxScroll > 70 else { return }
+        pullingToRefresh = true
+        Task {
+            await refreshNewest()
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            pullingToRefresh = false
+        }
+    }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
         if animated { withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) } }

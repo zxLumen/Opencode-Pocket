@@ -229,6 +229,7 @@ final class PocketStore {
             startEvents()
             startPolling()
             await refreshAll()
+            refreshTick += 1      // 回前台后让打开着的会话详情立即重拉消息
         case .disconnected:
             await connect()
         default:
@@ -326,6 +327,7 @@ final class PocketStore {
             let map = try await c.getData("/api/session/active", as: [String: ActiveStatus].self)
             activeIDs = Set(map.compactMap { $0.value.type == "running" ? $0.key : nil })
             offline = false
+            refreshTick += 1          // 兜底轮询也驱动详情页刷新（SSE 断流时仍能更新）
         } catch { markOfflineIfNetwork(error) }
     }
 
@@ -474,6 +476,16 @@ final class PocketStore {
             }
             refreshTick += 1
             Task { await loadSessions(); await loadPending() }
+            // 抵消「事件先到、消息后落库」的竞态：稍后再催两次刷新，
+            // 确保失败原因 / 收尾内容被拉取到（否则详情页会永远停在报错前一帧）。
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                guard let self else { return }
+                await self.loadSessions()
+                self.refreshTick += 1
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                self.refreshTick += 1
+            }
         case "session.execution.started", "session.step.started":
             if let sid { activeIDs.insert(sid); sessionErrors[sid] = nil }
             Task { await loadActive() }
