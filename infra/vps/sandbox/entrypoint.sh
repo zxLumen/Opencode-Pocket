@@ -11,7 +11,15 @@ cp /srv/config-ro/AGENTS.md "$HOME/.config/opencode/AGENTS.md"
 # 不覆盖访客内容。/workspace 挂的是可写卷。
 [ -f /workspace/README.md ] || cp /srv/config-ro/README.md /workspace/README.md 2>/dev/null || true
 [ -f /workspace/AGENTS.md ] || cp /srv/config-ro/AGENTS.md /workspace/AGENTS.md 2>/dev/null || true
-# 辅助服务(内网 4173,由边缘 Caddy 转发):工作台页 + /config 净化 + /workspace 只读预览。
-# 先起它再起 opencode:它取上游配置时自带重试,不怕 opencode 尚未就绪。
-node /srv/static-server.mjs &
+# 辅助服务(内网 47311,由边缘 Caddy 转发):工作台页 + /config 净化 + /workspace 预览
+# + 访客后端反代。用**监督循环常驻**——即便被误杀(如 agent 腾端口)也自动拉起,
+# 避免整站 404。先起它再起 opencode:它取上游配置时自带重试,不怕 opencode 未就绪。
+(
+  set +e
+  while true; do
+    node /srv/static-server.mjs
+    echo "[sandbox-helper] exited, restarting in 1s" >&2
+    sleep 1
+  done
+) &
 exec opencode "$@"

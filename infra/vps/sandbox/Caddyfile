@@ -8,11 +8,11 @@
 #
 # 为什么单独一个 Caddy:访客锁定的配置完全属于本仓库,与博客的 Caddyfile 互不影响
 # (博客侧只有 3 行固定转发)。本服务不发布端口,由博客栈的 Caddy 做 TLS 后转发到
-# sandbox-caddy:80;上游 opencode-play(以及沙盒内辅助服务 :4173)与本服务同在
+# sandbox-caddy:80;上游 opencode-play(以及沙盒内辅助服务 :47311)与本服务同在
 # docker_play 网络(external)。
 #
 # 会话 id 用 {$PLAYGROUND_SESSION_ID:ses_guest}(默认 ses_guest,由 compose 注入)。
-# 辅助服务(4173,见 infra/vps/sandbox/static-server.mjs)提供:/__hub 工作台页、
+# 辅助服务(47311,见 infra/vps/sandbox/static-server.mjs)提供:/__hub 工作台页、
 # /__config 净化配置(去掉含密钥的 provider)、/preview/* 工作区只读预览。
 :80 {
 	header {
@@ -41,16 +41,11 @@
 		respond 403
 	}
 
-	# ② 网站预览通道(只读):透传到沙盒内辅助服务的静态文件服务(根 = /workspace)
+	# ② 网站预览 + 访客后端反代:全部方法透传到辅助服务
+	#    (静态文件优先;不存在的前端资源 / API / 写请求 → 反代到访客后端约定端口 8000)
 	@preview path_regexp ^/preview(/|$)
 	handle @preview {
-		@previewRead method GET HEAD
-		handle @previewRead {
-			reverse_proxy opencode-play:4173
-		}
-		handle {
-			respond 403
-		}
+		reverse_proxy opencode-play:47311
 	}
 
 	# ③ 模型「查看」面净化:只暴露「博客 AI 网关」这一个 provider 与其默认模型
@@ -141,7 +136,7 @@
 		@cfgRead method GET HEAD
 		handle @cfgRead {
 			rewrite * /__config
-			reverse_proxy opencode-play:4173
+			reverse_proxy opencode-play:47311
 		}
 		handle {
 			respond 403
@@ -152,7 +147,7 @@
 		@cfgRead2 method GET HEAD
 		handle @cfgRead2 {
 			rewrite * /__gconfig
-			reverse_proxy opencode-play:4173
+			reverse_proxy opencode-play:47311
 		}
 		handle {
 			respond 403
@@ -174,7 +169,7 @@
 		@rootDoc path / /hub
 		handle @rootDoc {
 			rewrite * /__hub
-			reverse_proxy opencode-play:4173
+			reverse_proxy opencode-play:47311
 		}
 		# 固定会话路径 = 会话外壳(嵌在工作台左栏)。改由沙盒内辅助服务
 		# (static-server.mjs 的 /__shell)取回 opencode 的 index.html、注入外壳代码后
@@ -184,7 +179,7 @@
 		handle @atSession {
 			header Content-Type "text/html; charset=utf-8"
 			rewrite * /__shell
-			reverse_proxy opencode-play:4173
+			reverse_proxy opencode-play:47311
 		}
 		# 其它文档请求一律拉回工作台
 		handle {

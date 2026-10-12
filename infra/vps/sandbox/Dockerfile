@@ -17,7 +17,7 @@ ENV HOME=/home/opencode \
 
 # 辅助服务(static-server.mjs:工作台页 + /config 净化 + /workspace 只读预览)需要一个
 # JS 运行时;官方镜像是 Alpine,自带的运行时里没有 node(只有 busybox),这里补上。
-# 辅助服务只在容器内网 4173 监听,由边缘 Caddy 转发,不对外发布端口。
+# 辅助服务只在容器内网 47311 监听,由边缘 Caddy 转发,不对外发布端口。
 RUN apk add --no-cache nodejs
 
 # 预建目录(镜像根文件系统只读后,只有被挂载的路径能写)
@@ -41,7 +41,7 @@ RUN chmod +x /usr/local/bin/opencode-play-entrypoint
 USER 10001:10001
 WORKDIR /workspace
 
-EXPOSE 4096 4173
+EXPOSE 4096 47311
 
 ENTRYPOINT ["/usr/local/bin/opencode-play-entrypoint"]
 # entrypoint exec opencode "$@" → opencode web --hostname 0.0.0.0 --port 4096

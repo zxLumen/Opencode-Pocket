@@ -10,16 +10,19 @@
 //   GET /preview/<path>     → 只读静态文件,根 = /workspace,不列目录、无目录穿越
 //
 // 只用 node 内置模块,无依赖;node 是官方 opencode 镜像自带的运行时。
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { stat, readFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
+import { connect as netConnect } from "node:net";
 
-const PORT = Number(process.env.SANDBOX_HELPER_PORT || 4173);
+const PORT = Number(process.env.SANDBOX_HELPER_PORT || 47311);
 const WORKSPACE = "/workspace";
 const HUB_FILE = "/srv/hub.html";
 const SESSION_ID = process.env.PLAYGROUND_SESSION_ID || "ses_guest";
 const UPSTREAM = process.env.SANDBOX_UPSTREAM || "http://127.0.0.1:4096";
+// 访客应用的**约定后端端口**:预览里的非静态请求(如 /api/*)会反代到它。
+const APP_PORT = Number(process.env.SANDBOX_APP_PORT || 8000);
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -200,7 +203,39 @@ async function serveFile(req, res, file) {
   createReadStream(file).pipe(res);
 }
 
-async function servePreview(req, res, pathname) {
+// 访客后端是否在约定端口监听
+function appUp() {
+  return new Promise((resolve) => {
+    const s = netConnect({ host: "127.0.0.1", port: APP_PORT });
+    let done = false;
+    const finish = (v) => { if (done) return; done = true; s.destroy(); resolve(v); };
+    s.setTimeout(400);
+    s.once("connect", () => finish(true));
+    s.once("timeout", () => finish(false));
+    s.once("error", () => finish(false));
+  });
+}
+
+// 把请求整体反代到访客后端(方法/请求体/响应体都透传)
+function proxyToApp(req, res, path, search) {
+  const headers = { ...req.headers, host: `127.0.0.1:${APP_PORT}` };
+  delete headers["connection"];
+  const up = httpRequest(
+    { host: "127.0.0.1", port: APP_PORT, method: req.method, path: path + (search || ""), headers },
+    (ur) => {
+      res.writeHead(ur.statusCode || 502, ur.headers);
+      ur.pipe(res);
+    },
+  );
+  up.on("error", () => {
+    if (res.headersSent) res.end();
+    else send(res, 502, "app unavailable", { "Content-Type": "text/plain; charset=utf-8" });
+  });
+  req.pipe(up);
+}
+
+async function servePreview(req, res, pathname, search) {
+  const isRead = req.method === "GET" || req.method === "HEAD";
   let rel = pathname.replace(/^\/preview\/?/, "");
   try {
     rel = decodeURIComponent(rel);
@@ -210,40 +245,42 @@ async function servePreview(req, res, pathname) {
   if (rel.includes("\0")) return send(res, 400, "bad path");
   const target = resolve(join(WORKSPACE, rel));
   if (target !== WORKSPACE && !target.startsWith(WORKSPACE + sep)) return send(res, 403, "forbidden");
-  let st;
-  try {
-    st = await stat(target);
-  } catch {
-    return notFound(res);
-  }
-  if (st.isDirectory()) {
-    // 不列目录:有 index.html 才回;根目录还没有网页时给中文提示(右栏不显示裸 404)
-    const idx = join(target, "index.html");
-    let st2;
-    try {
-      st2 = await stat(idx);
-    } catch {
+
+  // ① 静态文件优先:存在就直接读(不列目录)
+  if (isRead) {
+    let st = null;
+    try { st = await stat(target); } catch {}
+    if (st && st.isFile()) return serveFile(req, res, target);
+    if (st && st.isDirectory()) {
+      const idx = join(target, "index.html");
+      let st2 = null;
+      try { st2 = await stat(idx); } catch {}
+      if (st2 && st2.isFile()) return serveFile(req, res, idx);
       if (pathname === "/preview" || pathname === "/preview/") {
+        if (await appUp()) return proxyToApp(req, res, "/", search);
         return send(res, 200, PREVIEW_HINT, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       }
-      return notFound(res);
     }
-    return serveFile(req, res, idx);
   }
-  return serveFile(req, res, target);
+
+  // ② 其余(不存在的前端资源 / API / 写请求)→ 反代到访客后端(约定端口 8000)
+  if (await appUp()) return proxyToApp(req, res, "/" + rel, search);
+  return notFound(res);
 }
 
 const server = createServer(async (req, res) => {
-  if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "method not allowed");
   const url = new URL(req.url, "http://localhost");
   const pathname = url.pathname;
 
+  // 预览(含访客后端反代)支持任意方法(GET/HEAD/POST/PUT/DELETE…),先于只读校验
+  if (pathname === "/preview" || pathname.startsWith("/preview/")) return servePreview(req, res, pathname, url.search);
+
+  if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "method not allowed");
   if (pathname === "/__hub") return serveHub(req, res);
   if (pathname === "/__shell") return serveShell(req, res);
   if (pathname === "/__config") return serveSanitizedConfig(res, "/config", url.search);
   if (pathname === "/__gconfig") return serveSanitizedConfig(res, "/global/config", url.search);
   if (pathname === "/__preview-health") return send(res, 200, "ok", { "Content-Type": "text/plain" });
-  if (pathname === "/preview" || pathname.startsWith("/preview/")) return servePreview(req, res, pathname);
   return notFound(res);
 });
 

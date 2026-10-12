@@ -24,7 +24,7 @@ infra/vps/sandbox/
 │                       #   额外 apk 装了 nodejs:辅助服务(工作台/预览/净化)需要 JS 运行时
 ├── entrypoint.sh       # 每次启动把只读基准配置烤回家目录 + 后台拉起辅助服务
 ├── opencode.json       # 基准配置（烤进镜像只读区，运行时改动重启即还原）
-├── static-server.mjs   # 容器内辅助服务(:4173):工作台页 / /config净化 / /workspace只读预览
+├── static-server.mjs   # 容器内辅助服务(:47311):工作台页 / 配置净化 / 预览(静态优先+后端反代)
 ├── hub.html            # 工作台页(固定分栏 + 1s 实时预览 + 手机端上下分栏)
 ├── seed/               # 播种到工作区/家目录的助手说明与 README（仅缺失时写）
 │   ├── AGENTS.md
@@ -48,16 +48,16 @@ infra/vps/sandbox/
    │ reverse_proxy sandbox-caddy:80 { flush_interval -1 }
    ▼
 本次部署的 sandbox-caddy（边缘 Caddy，站点 :80）
-   │ ① 工作台:GET / → 转发沙盒内辅助服务 :4173 的 /__hub(固定分栏双 iframe)
-   │ ② 会话预览:/preview/* → :4173 只读静态(根=/workspace,不列目录)
+   │ ① 工作台:GET / → 转发沙盒内辅助服务 :47311 的 /__hub(固定分栏双 iframe)
+   │ ② 预览:/preview/* → :47311:静态文件优先,其余反代到访客后端(约定端口 8000)
    │ ③ 锁定:文档请求只认唯一会话、其余 302 回工作台;写入白名单只放行该会话下的
    │    对话操作;pty/shell/tui、session/fork、改模型接口全封
    │ ④ 模型封锁:/provider 净化成「仅网关默认」(剥 apiKey、保留 default 映射);
-   │    /api/model 回空壳;GET /config、/global/config → :4173 的净化代理
+   │    /api/model 回空壳;GET /config、/global/config → :47311 的净化代理
    │    (去掉含密钥的 provider 块);额外放行 POST /api/session/<id>/agent 供 Plan/Build 切换
    │ ⑤ 其余 HTML 请求返回「自建外壳」(取二进制真 index.html,注入隐藏+守卫)
    ▼
-docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容器内辅助服务 :4173）
+docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容器内辅助服务 :47311）
                           │ 只接 docker_play，其它子应用一律不可达
                           ├─ /workspace        ← named volume，访客共享目录（可写）
                           ├─ /home/opencode    ← named volume（会话 / 状态）
@@ -86,7 +86,8 @@ docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容�
 
 1. **全阶段封禁**（含 GET）：`^/(api/)?(pty|shell|tui)(/|$)`、`^/session/[^/]+/(shell|fork)(/|$)`
    与 `^/(api/)?session/[^/]+/model$`（改模型接口）→ `403`。
-2. **网站预览通道**：`/preview/*`（仅 GET/HEAD）→ 辅助服务 `:4173` 只读静态
+2. **预览通道**：`/preview/*`（任意方法）→ 辅助服务 `:47311`——**静态文件优先**，其余
+   （不存在的前端资源 / API / 写请求）**反代到访客后端**（约定端口 `8000`）。
    （根 = `/workspace`，无目录列表、无目录穿越）；其它方法 `403`。
 3. **模型「查看」面净化**：`/(api/)?provider…` 回「仅博客 AI 网关」净化壳 —— `all` 只留
    `zxgw`（`options.apiKey` 剥掉、只留 `baseURL`），**`default` 映射保留**
@@ -135,8 +136,14 @@ docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容�
   localStorage），手机端（<820px）自动改为上下分栏（也可拖）。
 - 预览**实时性 1 秒级**：工作台每 1 秒 `HEAD /preview/` 探 `Last-Modified` / 长度，
   文件变了才 `reload`（不闪、不丢滚动/画布状态）；另有手动刷新按钮。
-- 预览由容器内辅助服务直接读 `/workspace`（`read_only` 语义:只 GET/HEAD、不列目录、
-  防穿越）；目录没有 `index.html` 时给中文提示。
+- **静态文件优先**：辅助服务直接读 `/workspace`（不列目录、防穿越）；目录没有
+  `index.html` 时给中文提示。
+- **访客后端反代**：`/preview/*` 里**不存在的前端资源 / API / 写请求**会整体反代到
+  容器内 `127.0.0.1:8000`（约定端口；方法/请求体/响应体都透传）。所以访客可以
+  「静态前端 + Node 后端」：前端用**相对路径** `fetch('api/scores')`（→ `/preview/api/scores`
+  → 后端 `/api/scores`）；**不要用绝对 `/api/*`**（会撞 opencode）。约定写进沙盒 `AGENTS.md`。
+- **保留端口**：`4096`（opencode）、`47311`（辅助服务）禁止占用/杀进程；访客后端固定用
+  `8000`。辅助服务由 `entrypoint.sh` 的**监督循环常驻**，被误杀会自动拉起（否则整站 404）。
 - `/workspace` 本身不暴露任何管理接口 —— 访客要往里面放文件，走会话里的 opencode
   （写文件工具）而非 HTTP。
 
