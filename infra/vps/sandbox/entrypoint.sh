@@ -3,6 +3,12 @@
 # 家目录挂的是可写卷——opencode 会在 .config 里写 .gitignore 等,故不能整体只读;
 # 这里保证:任何运行时对 opencode.json 的篡改,重启即被覆盖回出厂值。
 set -e
+# opencode v2.0.x 强制 Basic 鉴权:容器内辅助服务直连 127.0.0.1:4096 需要自带凭据。
+# 由同一个密码现算 "Basic <base64>"(边缘 Caddy 侧用同样的算法,见 docker-compose.yml)。
+if [ -n "${OPENCODE_SERVER_PASSWORD:-}" ]; then
+  SANDBOX_UPSTREAM_AUTH="Basic $(printf 'opencode:%s' "$OPENCODE_SERVER_PASSWORD" | base64 | tr -d '\n')"
+  export SANDBOX_UPSTREAM_AUTH
+fi
 mkdir -p "$HOME/.config/opencode"
 cp /srv/config-ro/opencode.json "$HOME/.config/opencode/opencode.json"
 # 全局助手说明(opencode 会读 $HOME/.config/opencode/AGENTS.md);同样每次覆盖回出厂值。

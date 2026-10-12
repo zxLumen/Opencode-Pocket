@@ -81,7 +81,16 @@
   var KEY_V = "zx_hub_split_v";
 
   document.getElementById("sid-label").textContent = SID;
-  document.getElementById("f-session").src = "/global/session/" + SID;
+  // opencode v2.0.x 的会话路由:/server/<base64(serverKey)>/session/<id>,
+  // 其中 serverKey = location.origin(生产环境 currentServerUrl = location.origin)。
+  // base64 用 URL-safe、去 padding(与 @opencode/util 的 base64Encode 一致)。
+  function b64url(s) {
+    var bin = "";
+    var bytes = new TextEncoder().encode(s);
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+  }
+  document.getElementById("f-session").src = "/server/" + b64url(location.origin) + "/session/" + SID;
 
   // ---- 分栏拖拽(横向;手机端纵向) ----
   var bar = document.getElementById("bar");

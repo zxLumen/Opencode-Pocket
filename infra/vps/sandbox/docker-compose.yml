@@ -23,9 +23,17 @@ services:
   sandbox-caddy:
     image: caddy:2
     restart: unless-stopped
+    # 向上游 opencode 注入 Basic 凭据(v2.0.x 强制鉴权)。密码由 .env 注入,
+    # 这里现算成 "Basic <base64>" 供 Caddyfile 的 {$SANDBOX_UPSTREAM_AUTH} 使用。
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        export SANDBOX_UPSTREAM_AUTH="Basic $$(printf 'opencode:%s' "$$PLAYGROUND_SERVER_PASSWORD" | base64 | tr -d '\n')"
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
     environment:
       # 锁定用的唯一会话 id(Caddyfile 里的 {$PLAYGROUND_SESSION_ID:ses_guest} 读它)
       PLAYGROUND_SESSION_ID: ${PLAYGROUND_SESSION_ID:-ses_guest}
+      PLAYGROUND_SERVER_PASSWORD: ${PLAYGROUND_SERVER_PASSWORD:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - sandbox-caddy-data:/data
@@ -45,6 +53,10 @@ services:
     environment:
       # 博客 AI 网关令牌(博客 admin「AI 密钥」页签发:每日 token 上限 + 便宜模型)
       ZX_AI_APP_TOKEN: ${PLAYGROUND_AI_TOKEN:-}
+      # opencode v2.0.x 绑 0.0.0.0 时强制 Basic 鉴权;这里固定密码,由边缘 Caddy
+      # 与容器内辅助服务各自注入,访客侧不可见。
+      OPENCODE_SERVER_PASSWORD: ${PLAYGROUND_SERVER_PASSWORD:-}
+      PLAYGROUND_SESSION_ID: ${PLAYGROUND_SESSION_ID:-ses_guest}
     init: true
     user: "10001:10001"
     read_only: true
@@ -76,24 +88,26 @@ services:
       - opencode-play
     environment:
       SESSION_ID: ${PLAYGROUND_SESSION_ID:-ses_guest}
+      PASSWORD: ${PLAYGROUND_SERVER_PASSWORD:-}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
         base="http://opencode-play:4096"
+        auth="opencode:$$PASSWORD"
         i=0
-        until curl -fsS "$$base/global/health" >/dev/null 2>&1 || [ "$$i" -ge 60 ]; do
+        until curl -fsS -u "$$auth" "$$base/global/health" >/dev/null 2>&1 || [ "$$i" -ge 60 ]; do
           i=$$((i+1)); sleep 2
         done
-        if curl -fsS -o /dev/null "$$base/session/$$SESSION_ID"; then
+        if curl -fsS -u "$$auth" -o /dev/null "$$base/api/session/$$SESSION_ID"; then
           echo "[init] 会话 $$SESSION_ID 已存在"
           exit 0
         fi
-        curl -fsS -X POST "$$base/api/session" \
+        curl -fsS -u "$$auth" -X POST "$$base/api/session" \
           -H 'content-type: application/json' \
           -d "{\"id\":\"$$SESSION_ID\",\"location\":{\"directory\":\"/workspace\"}}" \
           && echo "[init] 已补建会话 $$SESSION_ID"
-        curl -fsS -X PATCH "$$base/session/$$SESSION_ID" \
+        curl -fsS -u "$$auth" -X PATCH "$$base/api/session/$$SESSION_ID" \
           -H 'content-type: application/json' -d '{"title":"访客沙盒"}' >/dev/null || true
     networks:
       - play

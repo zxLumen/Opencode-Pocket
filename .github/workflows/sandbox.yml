@@ -57,3 +57,23 @@ jobs:
           tags: |
             ${{ steps.img.outputs.sandbox }}:${{ github.sha }}
             ${{ steps.img.outputs.sandbox }}:latest
+
+      # sourcemap 方案 B:裁剪版 Web UI 的 .map 不进公开镜像,但按「该次构建」留档。
+      # 复用上面构建阶段(GHA cache 命中 → 秒级),只把 Dockerfile 的 app-maps 阶段
+      # 导出到 runner,再作为 artifact 上传。出事时用同一 sha 的 artifact 还原源码栈。
+      - name: Export sourcemaps (plan B)
+        run: |
+          docker buildx build \
+            --target app-maps \
+            --output type=local,dest=./app-maps \
+            --cache-from type=gha \
+            --file infra/vps/sandbox/Dockerfile \
+            infra/vps/sandbox
+
+      - name: Upload sourcemaps artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-maps-${{ github.sha }}
+          path: app-maps/
+          if-no-files-found: warn
+          retention-days: 90

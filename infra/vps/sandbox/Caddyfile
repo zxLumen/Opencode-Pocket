@@ -1,19 +1,33 @@
-# 访客沙盒 · 边缘 Caddy(站点地址 :80)
+# 访客沙盒 · 边缘 Caddy(站点地址 :80)—— 面向 opencode v2.0.27
 #
-# 三层职责都在本文件:
-#   ① 访客锁定 —— 文档请求只认唯一会话,其余 302 回工作台;自建外壳(注入隐藏与守卫)
-#   ② 工作台 —— GET / 返回双栏工作台(会话 | 网站实时预览);入口不再直接是会话
+# 三层职责:
+#   ① 访客锁定 —— 文档请求只认唯一会话,其余 302 回工作台;裁剪版 UI + 外壳注入 + 门控
+#   ② 工作台 —— GET / 返回双栏工作台(会话 | 网站实时预览)
 #   ③ 模型封锁 —— 访客看不到可选模型、也换不了模型(读接口净化成「仅网关默认」+
-#      写接口 403 + 前端隐藏 Select model 按钮;保留 default 映射,发消息不被前端拦)
+#      写接口 403 + 前端隐藏模型入口)
 #
-# 为什么单独一个 Caddy:访客锁定的配置完全属于本仓库,与博客的 Caddyfile 互不影响
-# (博客侧只有 3 行固定转发)。本服务不发布端口,由博客栈的 Caddy 做 TLS 后转发到
-# sandbox-caddy:80;上游 opencode-play(以及沙盒内辅助服务 :47311)与本服务同在
-# docker_play 网络(external)。
+# v2.0.27 与 v1.19 的关键差异(本文件据此改写):
+#   - API 全部在 /api/* 下(/api/session、/api/config、/api/provider、/api/model…);
+#   - opencode 绑 0.0.0.0 时**强制 Basic 鉴权** → 本服务向上游注入 Authorization,
+#     对访客透明(访客侧不暴露任何凭据);
+#   - UI 资源前缀 /_assets/*,图标 /icons/prod/*。
 #
+# 本服务不发布端口,由博客栈的 Caddy 做 TLS 后转发到 sandbox-caddy:80。
 # 会话 id 用 {$PLAYGROUND_SESSION_ID:ses_guest}(默认 ses_guest,由 compose 注入)。
-# 辅助服务(47311,见 infra/vps/sandbox/static-server.mjs)提供:/__hub 工作台页、
-# /__config 净化配置(去掉含密钥的 provider)、/preview/* 工作区只读预览。
+# 上游鉴权用 {$SANDBOX_UPSTREAM_AUTH}(形如 "Basic <base64>",由 compose 注入)。
+
+# 上游转发片段:注入 Basic 凭据(覆盖客户端自带值),SSE 关闭缓冲
+(to_oc) {
+	reverse_proxy opencode-play:4096 {
+		header_up Authorization "{$SANDBOX_UPSTREAM_AUTH}"
+		header_up -Cookie
+		flush_interval -1
+	}
+}
+(to_helper) {
+	reverse_proxy opencode-play:47311
+}
+
 :80 {
 	header {
 		X-Content-Type-Options nosniff
@@ -21,170 +35,125 @@
 		-Server
 	}
 
-	# ⓪ 响应压缩:SPA bundle 约 2.7MB,不压缩时访客首访要下好几十秒;压到约 0.8MB
-	#    (zstd 优先、gzip 兜底)。SSE 事件流不受影响:opencode 的 SSE 响应带
-	#    Cache-Control: no-transform,Caddy 据此直接跳过压缩;即便压缩,Caddy 对
-	#    text/event-stream 也会立即发头并逐事件 flush 编码器,不会缓冲。
+	# ⓪ 响应压缩(bundle 较大;SSE 带 no-transform 会自动跳过)
 	encode zstd gzip
 
-	# ① 全阶段封禁(含 GET):PTY / shell / TUI,以及「改模型」
-	@banned path_regexp ^/(api/)?(pty|shell|tui)(/|$)
-	@bannedSub path_regexp ^/session/[^/]+/(shell|fork)(/|$)
-	@bannedModel path_regexp ^/(api/)?session/[^/]+/model$
-	handle @banned {
+	# ① 危险族:读+写全封(文件系统 / PTY / shell 执行 / 凭据 / MCP / 集成 / 插件 /
+	#    debug / experimental / rpc / 配对 / 配置 shell)。这些能力对公开沙盒一律不可达。
+	@bannedFamily path_regexp ^/api/(fs|pty|credential|mcp|integration|plugin|debug|experimental|rpc|pair|tui)(/|$)
+	handle @bannedFamily {
 		respond 403
 	}
-	handle @bannedSub {
+	@bannedShellExec path_regexp ^/api/shell/
+	handle @bannedShellExec {
 		respond 403
 	}
-	handle @bannedModel {
+	@bannedMisc path /api/location/reload /api/config/shell
+	handle @bannedMisc {
 		respond 403
 	}
-
-	# ② 网站预览 + 访客后端反代:全部方法透传到辅助服务
-	#    (静态文件优先;不存在的前端资源 / API / 写请求 → 反代到访客后端约定端口 8000)
-	@preview path_regexp ^/preview(/|$)
-	handle @preview {
-		reverse_proxy opencode-play:47311
+	# 会话内危险子操作:shell 工具 / fork
+	@bannedSessionSub path_regexp ^/api/session/[^/]+/(shell|fork)(/|$)
+	handle @bannedSessionSub {
+		respond 403
 	}
-
-	# ③ 模型「查看」面净化:只暴露「博客 AI 网关」这一个 provider 与其默认模型
-	#    (剥掉 options.apiKey / 内网地址之外的信息;保留 default 映射 → 前端「默认模型」
-	#    非空,发送消息不再被 SPA 拦截;all 只留 zxgw → 弹窗无可选模型)。
-	@modelProvider path_regexp ^/(api/)?provider(/|$)
-	handle @modelProvider {
-		@get method GET HEAD
-		handle @get {
-			respond <<JSON
-			{
-			  "all": [
-			    {
-			      "id": "zxgw",
-			      "name": "博客 AI 网关",
-			      "source": "config",
-			      "env": [],
-			      "options": { "baseURL": "http://app:3000/api/ai/v1" },
-			      "models": {
-			        "gateway-default": {
-			          "id": "gateway-default",
-			          "providerID": "zxgw",
-			          "api": { "id": "gateway-default", "url": "", "npm": "@ai-sdk/openai-compatible" },
-			          "name": "网关默认模型",
-			          "family": "",
-			          "capabilities": {
-			            "temperature": false,
-			            "reasoning": false,
-			            "attachment": false,
-			            "toolcall": true,
-			            "input": { "text": true, "audio": false, "image": false, "video": false, "pdf": false },
-			            "output": { "text": true, "audio": false, "image": false, "video": false, "pdf": false },
-			            "interleaved": false
-			          },
-			          "cost": { "input": 0, "output": 0, "cache": { "read": 0, "write": 0 } },
-			          "limit": { "context": 0, "output": 0 },
-			          "status": "active",
-			          "options": {},
-			          "headers": {},
-			          "release_date": "",
-			          "variants": {}
-			        }
-			      }
-			    }
-			  ],
-			  "default": { "zxgw": "gateway-default" },
-			  "connected": ["zxgw"]
-			}
-			JSON 200
+	# 改模型:POST 交给辅助服务强制成网关默认模型(忽略请求体);其余方法 403
+	@sessionModel path_regexp ^/api/session/[^/]+/model$
+	handle @sessionModel {
+		@modelPost method POST
+		handle @modelPost {
+			import to_helper
 		}
 		handle {
 			respond 403
 		}
 	}
-	@modelListV2 path /api/model
-	handle @modelListV2 {
-		respond `{"location":{},"data":[]}` 200
-	}
-	# /api/model/default 服务端没有该端点(会落 SPA index.html),补一个合法响应,
-	# 防 SPA 的 v2 数据分支把返回体当 JSON 解析时崩掉。
-	@modelDefaultV2 path /api/model/default
-	handle @modelDefaultV2 {
-		respond `{"location":{},"data":{"providerID":"zxgw","id":"gateway-default"}}` 200
-	}
-	@configProviders path /config/providers
-	handle @configProviders {
-		respond `{"providers":[]}` 200
-	}
-	# 斜杠命令:服务端不拦截(拦 `/command` 会让 SPA 的 command bootstrap 报错),
-	# 改由外壳客户端在 keydown 捕获阶段拦掉菜单与执行(见 static-server.mjs)。
-	# highlights 新特性浮层的视频:即使某次仍被请求也不下发(1.37MB;正常已被外壳的
-	# localStorage 种子抑制,这里是兜底,防止首次加载白下 1.37MB)
-	@highlightVideo path_regexp ^/assets/introducing-tabs.*\.mp4$
-	handle @highlightVideo {
-		respond 204
-	}
-	# /api/reference:上游对「乱码目录」会 500,SPA 收到非 2xx 就弹「无法重新加载」toast。
-	# 补一个合法空列表(v1 与 v2 同名),消除该报错弹窗。
-	@reference path /api/reference /reference
-	handle @reference {
-		respond `{"location":{},"data":[]}` 200
+
+	# ② 网站预览 + 访客后端反代(全部方法透传到辅助服务)
+	@preview path_regexp ^/preview(/|$)
+	handle @preview {
+		import to_helper
 	}
 
-	# ④ /config、/global/config:走沙盒内辅助服务的净化代理(去掉 provider 块里的
-	#    网关密钥与内网地址);直接 403 会让前端 bootstrap 报错,故用净化替代
-	@configPath path /config
+	# ③ 模型/配置「净化」:剥掉网关密钥,只暴露「博客 AI 网关」与其默认模型。
+	#    (opencode v2.0.x 的 /api/provider、/api/model、/api/model/default 响应里
+	#     settings 会带 apiKey,必须由辅助服务净化。)
+	@configPath path /api/config
 	handle @configPath {
 		@cfgRead method GET HEAD
 		handle @cfgRead {
 			rewrite * /__config
-			reverse_proxy opencode-play:47311
+			import to_helper
 		}
 		handle {
 			respond 403
 		}
 	}
-	@globalConfigPath path /global/config
-	handle @globalConfigPath {
-		@cfgRead2 method GET HEAD
-		handle @cfgRead2 {
-			rewrite * /__gconfig
-			reverse_proxy opencode-play:47311
+	@providerPath path /api/provider
+	handle @providerPath {
+		@provRead method GET HEAD
+		handle @provRead {
+			rewrite * /__provider
+			import to_helper
+		}
+		handle {
+			respond 403
+		}
+	}
+	@modelPath path /api/model
+	handle @modelPath {
+		@modelRead method GET HEAD
+		handle @modelRead {
+			rewrite * /__model
+			import to_helper
+		}
+		handle {
+			respond 403
+		}
+	}
+	@modelDefaultPath path /api/model/default
+	handle @modelDefaultPath {
+		@mdRead method GET HEAD
+		handle @mdRead {
+			rewrite * /__model-default
+			import to_helper
 		}
 		handle {
 			respond 403
 		}
 	}
 
-	# ⑤ 真外壳:供自建外壳 fetch(不带 text/html),取回二进制里的 index.html 原文
-	handle /__shell {
-		rewrite * /
-		reverse_proxy opencode-play:4096 {
-			flush_interval -1
-		}
+	# ④ 裁剪版 UI 静态资源(由辅助服务从 /srv/app-dist 提供)
+	@assets path_regexp ^/(_assets|assets|icons)/
+	handle @assets {
+		header Cache-Control "public, max-age=31536000, immutable"
+		import to_helper
+	}
+	@rootFiles path /favicon.ico /favicon.svg /favicon-v3.ico /favicon-v3.svg /favicon-96x96.png /favicon-96x96-v3.png /apple-touch-icon.png /apple-touch-icon-v3.png /oc-theme-preload.js /site.webmanifest /social-share.png /social-share-zen.png /web-app-manifest-192x192.png /web-app-manifest-512x512.png
+	handle @rootFiles {
+		import to_helper
+	}
+	@sw path /sw.js
+	handle @sw {
+		import to_helper
 	}
 
-	# Service Worker(只缓存不可变的 /assets/*;避免部署后陈旧页面)
-	handle /sw.js {
-		reverse_proxy opencode-play:47311
-	}
-
-	# ⑥ HTML 文档请求
+	# ⑤ HTML 文档请求
 	@htmldoc header Accept *text/html*
 	handle @htmldoc {
 		# 入口 = 工作台(会话 | 网站预览)
 		@rootDoc path / /hub
 		handle @rootDoc {
 			rewrite * /__hub
-			reverse_proxy opencode-play:47311
+			import to_helper
 		}
-		# 固定会话路径 = 会话外壳(嵌在工作台左栏)。改由沙盒内辅助服务
-		# (static-server.mjs 的 /__shell)取回 opencode 的 index.html、注入外壳代码后
-		# 直接返回:浏览器 1 个请求即拿到「终态 HTML」(去掉同步 XHR + document.write
-		# 的阻塞一拍),bundle/CSS 也能立刻并行发现并下载。
-		@atSession path_regexp ^/(global|server/[^/]+)/session/{$PLAYGROUND_SESSION_ID:ses_guest}(/|$)
+		# 固定会话路径 = 裁剪版 UI 外壳(嵌在工作台左栏)。URL 形如
+		# /server/<base64(origin)>/session/<id>,由辅助服务注入外壳后返回终态 HTML。
+		@atSession path_regexp ^/server/[^/]+/session/{$PLAYGROUND_SESSION_ID:ses_guest}(/|$)
 		handle @atSession {
 			header Content-Type "text/html; charset=utf-8"
 			rewrite * /__shell
-			reverse_proxy opencode-play:47311
+			import to_helper
 		}
 		# 其它文档请求一律拉回工作台
 		handle {
@@ -192,41 +161,24 @@
 		}
 	}
 
-	# ⑦ 写入白名单:非 GET/HEAD/OPTIONS 仅放行固定会话下的子路径,其余 403
-	#    (建会话 POST /session、改配置 PATCH /config、加项目 POST /project/* 等全被挡;
-	#     改模型 POST /session/<id>/model 已在 ① 全阶段封禁;
-	#     仅额外放行 Plan/Build 切换:POST /api/session/<id>/agent)
+	# ⑥ 写入白名单:非 GET/HEAD/OPTIONS 仅放行固定会话下的子路径,其余 403
+	#    (建会话 POST /api/session、改配置、加项目、worktree 刷新等全被挡;
+	#     会话内 shell/fork/model 已在 ① 封禁;仅额外放行 Plan/Build 切换)
 	@write not method GET HEAD OPTIONS
-	@allowed path_regexp ^/session/{$PLAYGROUND_SESSION_ID:ses_guest}/
+	@allowedSession path_regexp ^/api/session/{$PLAYGROUND_SESSION_ID:ses_guest}/
 	@agentSwitch path_regexp ^/api/session/{$PLAYGROUND_SESSION_ID:ses_guest}/agent$
 	handle @write {
-		handle @allowed {
-			reverse_proxy opencode-play:4096 {
-				flush_interval -1
-			}
+		handle @allowedSession {
+			import to_oc
 		}
 		handle @agentSwitch {
-			reverse_proxy opencode-play:4096 {
-				flush_interval -1
-			}
+			import to_oc
 		}
 		handle {
 			respond 403
 		}
 	}
 
-	# ⑧ 静态资源长缓存:SPA bundle 文件名带内容哈希(如 index-BkjnPp3h.js),
-	#    可安全 immutable 缓存一年,访客二次进入不再下载 2.7MB
-	@assets path_regexp ^/assets/.+\.(js|mjs|css|woff2?|ttf|otf|eot|png|jpe?g|webp|avif|gif|svg|ico|mp4|webm|m4a|mp3|wasm|json|map)$
-	handle @assets {
-		header Cache-Control "public, max-age=31536000, immutable"
-		reverse_proxy opencode-play:4096 {
-			flush_interval -1
-		}
-	}
-
-	reverse_proxy opencode-play:4096 {
-		# SSE(/api/event)必须关闭缓冲
-		flush_interval -1
-	}
+	# ⑦ 其余请求(会话读、事件流等)→ opencode
+	import to_oc
 }
