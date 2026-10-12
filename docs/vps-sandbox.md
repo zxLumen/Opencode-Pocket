@@ -110,6 +110,9 @@ docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容�
 9. **静态资源长缓存**：`GET /assets/*.{js,css,woff2,图片}` —— bundle 文件名带内容哈希
    （如 `index-BkjnPp3h.js`），可安全 `Cache-Control: public, max-age=31536000, immutable`
    一年；否则访客每次进入都要重下约 2.7MB 的 SPA bundle（进入慢的主因之一）。
+10. **响应压缩**：站点级 `encode zstd gzip` —— 未压缩的 SPA bundle 约 2.7MB，压缩后约 0.8MB
+    （首访提速约 3.4×）。opencode 的 SSE 响应带 `Cache-Control: no-cache, no-transform`，
+    Caddy 据此**跳过压缩**，事件流保持不缓冲直通，AI 实时流式不受影响。
 
 自建外壳通过隐藏 `header` / 拦截 `popstate`、`pushState` 等守卫，把访客钉在固定会话内；
 手机端右侧 `Session | Changes` 面板**保留**。
@@ -150,7 +153,13 @@ docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容�
   进入都产生无谓的 `agent-switched` 事件）；React 重渲染后由 MutationObserver 自动重建按钮。
 - **历史消息**：会话外壳注入 CSS 隐藏 `[data-slot=user-message-meta]` 与
   `[data-slot=text-part-meta]`（模型名与时长同在一个文本节点，整行隐藏最稳）。
-- **键盘捷径**：拦截 `Ctrl/Cmd + k / n / , / p`（防止唤起模型选择等浮动面板）。
+- **思考摘要默认开启**：外壳在 SPA 启动前把 `localStorage['settings.v3']`（SPA 设置存储的裸键）
+  合并写入 `general.showReasoningSummaries = true`（保留其它字段、不覆盖访客已有选择），
+  使 AI 的思考过程默认可见（SPA 默认是 `false`，会把 reasoning part 过滤掉）。
+- **键盘捷径**：拦截 `Ctrl/Cmd + k / n / , / p`（防止唤起模型选择等浮动面板），以及
+  `Ctrl/Cmd + Shift + R`（SPA 把它绑定为开合右侧 Review/Changes 面板，会误触分栏伸缩）；
+  拦截挂在 `window` 捕获阶段并同时 `preventDefault() + stopImmediatePropagation()`，
+  确保先于 SPA 自己的监听生效。
 - 服务端仍按 `opencode.json` 固定的 `zxgw/gateway-default` 走博客 AI 网关，不受影响；
   Plan/Build 只切换 agent 模式，模型始终固定。
 

@@ -21,6 +21,12 @@
 		-Server
 	}
 
+	# ⓪ 响应压缩:SPA bundle 约 2.7MB,不压缩时访客首访要下好几十秒;压到约 0.8MB
+	#    (zstd 优先、gzip 兜底)。SSE 事件流不受影响:opencode 的 SSE 响应带
+	#    Cache-Control: no-transform,Caddy 据此直接跳过压缩;即便压缩,Caddy 对
+	#    text/event-stream 也会立即发头并逐事件 flush 编码器,不会缓冲。
+	encode zstd gzip
+
 	# ① 全阶段封禁(含 GET):PTY / shell / TUI,以及「改模型」
 	@banned path_regexp ^/(api/)?(pty|shell|tui)(/|$)
 	@bannedSub path_regexp ^/session/[^/]+/(shell|fork)(/|$)
@@ -172,6 +178,7 @@
 			var SEL_CSS=SEL+",button:has(svg[data-component=provider-icon])";
 			var code="(function(){var S="+S+";"+
 			"var AG='zx-sandbox-agent';"+
+			"try{var RK='settings.v3',rw=localStorage.getItem(RK),ro=rw?JSON.parse(rw):{};ro=(ro&&typeof ro==='object')?ro:{};ro.general=(ro.general&&typeof ro.general==='object')?ro.general:{};if(ro.general.showReasoningSummaries!==true){ro.general.showReasoningSummaries=true;localStorage.setItem(RK,JSON.stringify(ro));}}catch(err){}"+
 			"var SEL="+JSON.stringify(SEL)+";"+
 			"function hideNow(n){try{var e=n.querySelectorAll(SEL);for(var i=0;i<e.length;i++)e[i].style.setProperty('display','none','important');}catch(err){}}"+
 			"function hideAll(){try{var e=document.querySelectorAll(SEL);for(var i=0;i<e.length;i++)e[i].style.setProperty('display','none','important');}catch(err){}}"+
@@ -184,7 +191,8 @@
 			"function run(){hideAll();ag();}"+
 			"new MutationObserver(onMut).observe(document.documentElement,{childList:true,subtree:true});"+
 			"document.addEventListener('DOMContentLoaded',function(){run();syncAgent();});run();guard();setInterval(guard,800);"+
-			"document.addEventListener('keydown',function(ev){if(!(ev.metaKey||ev.ctrlKey))return;var k=(ev.key||'').toLowerCase();if(k==='k'||k==='n'||k===','||k==='p')ev.preventDefault();},true);"+
+			"function keyb(ev){if(!(ev.metaKey||ev.ctrlKey))return;var k=(ev.key||'').toLowerCase();if(k==='k'||k==='n'||k===','||k==='p'||(k==='r'&&ev.shiftKey)){ev.preventDefault();ev.stopImmediatePropagation();}}"+
+			"window.addEventListener('keydown',keyb,true);document.addEventListener('keydown',keyb,true);"+
 			"})();";
 			var inject="<style>"+SEL_CSS+"{display:none!important}"+
 			"[class*=\"md:max-w-200\"],[class*=\"2xl:max-w-[1000px]\"]{max-width:none!important}"+
