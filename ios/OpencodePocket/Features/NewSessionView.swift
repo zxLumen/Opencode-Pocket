@@ -10,7 +10,7 @@ struct NewSessionView: View {
     @State private var modelLabel = ""
     @State private var busy = false
 
-    private var models: [ModelRef] { store.distinctModels }
+    private var models: [ModelRef] { store.modelOptions }
     private var selectedModel: ModelRef? { models.first { $0.label == modelLabel } }
 
     var body: some View {
@@ -66,7 +66,16 @@ struct NewSessionView: View {
             }
             .onAppear {
                 if directory.isEmpty { directory = store.knownDirectories.first ?? "" }
-                if modelLabel.isEmpty { modelLabel = store.suggestedModel?.label ?? "" }
+                if modelLabel.isEmpty {
+                    let preferred = store.defaultModelLabel
+                    if !preferred.isEmpty, models.contains(where: { $0.label == preferred }) {
+                        modelLabel = preferred
+                    } else if let s = store.suggestedModel?.label {
+                        modelLabel = s
+                    } else {
+                        modelLabel = models.first?.label ?? ""
+                    }
+                }
             }
         }
     }

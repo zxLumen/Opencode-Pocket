@@ -63,6 +63,13 @@ struct ComposerView: View {
                 .padding(.horizontal, 14)
             }
 
+            Picker("mode", selection: modeBinding) {
+                Text("Plan").tag("plan")
+                Text("Build").tag("build")
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 10)
+
             HStack(alignment: .bottom, spacing: 8) {
                 PhotosPicker(selection: $photoItems, maxSelectionCount: 10, matching: .images) {
                     Image(systemName: "photo")
@@ -101,6 +108,8 @@ struct ComposerView: View {
         .background(Color(.systemBackground))
         .overlay(Divider(), alignment: .top)
         .onChange(of: photoItems) { _, items in Task { await handlePhotos(items) } }
+        .onAppear { if text.isEmpty, let d = store.drafts[sessionID] { text = d } }
+        .onChange(of: text) { _, v in store.drafts[sessionID] = v }
         .onChange(of: speech.transcript) { _, t in
             guard speech.isRecording else { return }
             // 只追加增量：保留手动输入的换行/编辑，新说的话往后加
@@ -110,6 +119,13 @@ struct ComposerView: View {
             lastTranscript = t
         }
         .onDisappear { speech.stop() }
+    }
+
+    private var modeBinding: Binding<String> {
+        Binding(
+            get: { store.session(sessionID)?.agent ?? "" },
+            set: { v in Task { await store.switchAgent(sessionID: sessionID, agent: v) } }
+        )
     }
 
     private func toggleSpeech() {

@@ -10,6 +10,16 @@ struct ModelRef: Codable, Hashable, Sendable {
     var label: String { "\(providerID)/\(id)" }
 }
 
+struct ModelDTO: Decodable, Sendable {
+    var id: String
+    var providerID: String
+    var modelID: String?
+    var name: String?
+    var variant: String?
+
+    var ref: ModelRef { ModelRef(id: modelID ?? id, providerID: providerID, variant: variant) }
+}
+
 struct Session: Codable, Identifiable, Hashable, Sendable {
     var id: String
     var title: String?

@@ -70,6 +70,12 @@ final class PocketStore {
     var lastViewedAt: [String: Double] = Prefs.viewed
     var messageCache: [String: [Message]] = [:]
     var cursorCache: [String: String] = [:]
+    var availableModels: [ModelRef] = []
+    var drafts: [String: String] = [:]
+    var queued: [String: String] = [:]
+    var defaultModelLabel: String = UserDefaults.standard.string(forKey: "opencode.pocket.defaultModel") ?? "" {
+        didSet { UserDefaults.standard.set(defaultModelLabel, forKey: "opencode.pocket.defaultModel") }
+    }
 
     // Connection form fields
     static let defaultServerURL = "https://pocket.example.com"
@@ -172,7 +178,24 @@ final class PocketStore {
         async let a: Void = loadSessions()
         async let b: Void = loadAgents()
         async let c: Void = loadPending()
-        _ = await (a, b, c)
+        async let d: Void = loadModels()
+        _ = await (a, b, c, d)
+    }
+
+    func loadModels() async {
+        guard let c = try? client() else { return }
+        if let list = try? await c.getData("/api/model", as: [ModelDTO].self) {
+            availableModels = list.map { $0.ref }
+        }
+    }
+
+    /// 可选模型：优先服务器返回的列表，回退到现有会话里用过的。
+    var modelOptions: [ModelRef] {
+        var seen = Set<String>()
+        var out: [ModelRef] = []
+        for m in (availableModels.isEmpty ? distinctModels : availableModels)
+        where !seen.contains(m.label) { seen.insert(m.label); out.append(m) }
+        return out
     }
 
     func loadSessions() async {
@@ -340,6 +363,7 @@ final class PocketStore {
             }
             try await c.postJSON("/api/session/\(sessionID)/prompt", json: body)
             sessionErrors[sessionID] = nil   // 新的指令，清掉上次错误
+            queued[sessionID] = text.isEmpty ? "继续" : text   // 乐观：立即显示"发送中"
             refreshTick += 1
         } catch {
             lastError = error.localizedDescription

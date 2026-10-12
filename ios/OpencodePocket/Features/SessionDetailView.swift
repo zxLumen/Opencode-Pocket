@@ -92,6 +92,12 @@ struct SessionDetailView: View {
                                 .padding(8)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                        } else if session?.outcome == "failed" {
+                            Label("上次执行失败（可继续对话重试）", systemImage: "exclamationmark.octagon")
+                                .font(.caption).foregroundStyle(.red)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
                         }
 
                         if let err = store.lastError, !err.isEmpty {
@@ -100,6 +106,15 @@ struct SessionDetailView: View {
 
                         ForEach(visibleMessages) { message in
                             MessageRow(message: message).id(message.id)
+                        }
+
+                        if let q = store.queued[sessionID], !q.isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("你 · 发送中…").font(.caption2.bold()).foregroundStyle(.blue)
+                                Text(q)
+                            }
+                            .opacity(0.5)
+                            .id("queued")
                         }
 
                         if !live.isEmpty { LiveBubble(text: live).id("live") }
@@ -168,7 +183,6 @@ struct SessionDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                agentMenu
                 modelMenu
                 Button { Task { await store.interrupt(sessionID: sessionID) } } label: { Image(systemName: "stop.circle") }
                     .disabled(!isRunning)
@@ -208,6 +222,11 @@ struct SessionDetailView: View {
         let merged = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
         if merged != messages { messages = merged; persist() }
         if olderCursor == nil, let prev = page.previous { olderCursor = prev; persist() }
+        // 服务器已出现该用户消息 -> 清掉"发送中"气泡
+        if let q = store.queued[sessionID],
+           messages.contains(where: { $0.type == "user" && (($0.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == q) }) {
+            store.queued[sessionID] = nil
+        }
     }
 
     private func loadOlder(_ proxy: ScrollViewProxy) async {
@@ -249,17 +268,9 @@ struct SessionDetailView: View {
         }
     }
 
-    private var agentMenu: some View {
-        Menu {
-            ForEach(store.agents) { agent in
-                Button(agent.displayName) { Task { await store.switchAgent(sessionID: sessionID, agent: agent.id) } }
-            }
-        } label: { Image(systemName: "person.crop.circle") }
-    }
-
     private var modelMenu: some View {
         Menu {
-            ForEach(store.distinctModels, id: \.label) { model in
+            ForEach(store.modelOptions, id: \.label) { model in
                 Button(model.label) { Task { await store.switchModel(sessionID: sessionID, model: model) } }
             }
         } label: { Image(systemName: "cpu") }

@@ -25,6 +25,13 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("默认模型") {
+                    Picker("默认模型", selection: $store.defaultModelLabel) {
+                        Text("默认").tag("")
+                        ForEach(store.modelOptions, id: \.label) { m in Text(m.label).tag(m.label) }
+                    }
+                }
+
                 Section("状态") {
                     LabeledContent("版本", value: store.serverVersion ?? "—")
                     LabeledContent("会话数", value: "\(store.sessions.count)")
