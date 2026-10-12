@@ -21,6 +21,12 @@ private struct RowFrameKey: PreferenceKey {
         value.merge(nextValue()) { _, b in b }
     }
 }
+/// 底部哨兵在滚动坐标系里的位置——用来直接量「上拉过卷了多少」。
+private struct BottomYKey: PreferenceKey {
+    static var defaultValue: CGFloat = .greatestFiniteMagnitude
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+private enum PullPhase: Equatable { case idle, armed, refreshing, done }
 
 private func dismissKeyboard() {
     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
@@ -58,7 +64,10 @@ struct SessionDetailView: View {
     @State private var didInitialScroll = false
     @State private var showModels = false
     @State private var rowFrames: [String: CGRect] = [:]
-    @State private var pullingToRefresh = false
+    @State private var pullPhase: PullPhase = .idle
+    @State private var bottomMinY: CGFloat = .greatestFiniteMagnitude
+    @State private var refreshCount = 0
+    @State private var lastRefreshAt: Date?
     @State private var topMinY: CGFloat = 0
     @State private var contentHeight: CGFloat = 0
     @State private var viewportHeight: CGFloat = 0
@@ -94,8 +103,11 @@ struct SessionDetailView: View {
                     .onPreferenceChange(ContentHKey.self) { contentHeight = $0 }
                     .onPreferenceChange(ViewHKey.self) { viewportHeight = $0 }
                     .onPreferenceChange(RowFrameKey.self) { rowFrames = $0 }
+                    .onPreferenceChange(BottomYKey.self) { v in
+                        bottomMinY = v
+                        pullEvaluate()
+                    }
                     .onPreferenceChange(TopYKey.self) { minY in
-                        pullRefreshIfNeeded()
                         if didInitialScroll, minY > -60, olderCursor?.isEmpty == false, !loadingOlder {
                             Task { await loadOlder(proxy) }
                         }
@@ -180,25 +192,51 @@ struct SessionDetailView: View {
     }
 
     private var bottomSentinel: some View {
-        Color.clear.frame(height: 1).id(bottomID)
+        Color.clear
+            .frame(height: 1)
+            .id(bottomID)
+            .background(GeometryReader { g in
+                Color.clear.preference(key: BottomYKey.self, value: g.frame(in: .named("scroll")).minY)
+            })
     }
 
-    /// 底部提示条：默认「上拉刷新」，触发中显示「刷新中…」。
+    /// 底部提示条：上拉刷新（点一下也能刷新）。
     @ViewBuilder
     private var pullFooter: some View {
-        HStack(spacing: 6) {
-            if pullingToRefresh {
-                ProgressView().controlSize(.small)
-                Text("刷新中…")
-            } else {
-                Image(systemName: "arrow.up")
-                Text("上拉刷新")
+        Button { beginPullRefresh() } label: {
+            HStack(spacing: 6) {
+                switch pullPhase {
+                case .idle:
+                    Image(systemName: "arrow.up")
+                    Text("上拉刷新")
+                case .armed:
+                    Image(systemName: "arrow.up").font(.system(size: 15, weight: .bold))
+                    Text("松开刷新")
+                case .refreshing:
+                    ProgressView().controlSize(.small)
+                    Text("刷新中…")
+                case .done:
+                    Image(systemName: "checkmark.circle.fill")
+                    Text(doneLabel)
+                }
             }
+            .font(.caption2)
+            .foregroundStyle(pullPhase == .armed ? Color.accentColor
+                             : (pullPhase == .done ? Color.green : Color.secondary))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
         }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
+        .buttonStyle(.plain)
+    }
+
+    private var doneLabel: String {
+        var s = "已刷新 ×\(refreshCount)"
+        if let d = lastRefreshAt {
+            let f = DateFormatter(); f.dateFormat = "HH:mm:ss"
+            s += " · \(f.string(from: d))"
+        }
+        return s
     }
 
     private var loadingRow: some View {
@@ -257,17 +295,51 @@ struct SessionDetailView: View {
 
     // MARK: - Scroll helpers
 
-    /// 底部过卷（上拉）超过阈值时触发一次刷新。
-    private func pullRefreshIfNeeded() {
-        guard didInitialScroll, !pullingToRefresh else { return }
-        let maxScroll = max(contentHeight - viewportHeight, 0)
-        let scrolled = max(-topMinY, 0)
-        guard scrolled - maxScroll > 70 else { return }
-        pullingToRefresh = true
+    /// 底部过卷（上拉）超出阈值就触发刷新。
+    /// 直接量底部哨兵被推出视口多少：过卷量 = viewportHeight - 哨兵.minY。
+    private func pullEvaluate() {
+        guard didInitialScroll, viewportHeight > 0, pullPhase != .refreshing else { return }
+        let overscroll = viewportHeight - bottomMinY
+        switch pullPhase {
+        case .idle:
+            if overscroll >= 40 {
+                pullPhase = .armed
+                print("[pull] armed overscroll=\(Int(overscroll))")
+            }
+        case .armed:
+            if overscroll < 24 {
+                pullPhase = .idle
+            } else if overscroll >= 58 {
+                beginPullRefresh()
+            }
+        case .done:
+            if overscroll < 10 { pullPhase = .idle }
+        case .refreshing:
+            break
+        }
+    }
+
+    /// 执行一次刷新：转圈（最短 1.2s）→ 显示「已刷新 ×N · 时间」→ 回到上箭头。
+    private func beginPullRefresh() {
+        guard pullPhase != .refreshing else { return }
+        pullPhase = .refreshing
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        let started = Date()
         Task {
+            let before = messages.count
             await refreshNewest()
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            pullingToRefresh = false
+            print("[pull] refresh done \(before) -> \(messages.count) 条")
+            let elapsed = Date().timeIntervalSince(started)
+            if elapsed < 1.2 {
+                try? await Task.sleep(nanoseconds: UInt64((1.2 - elapsed) * 1_000_000_000))
+            }
+            if Task.isCancelled { return }
+            refreshCount += 1
+            lastRefreshAt = Date()
+            pullPhase = .done
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if Task.isCancelled { return }
+            if pullPhase == .done { pullPhase = .idle }
         }
     }
 
