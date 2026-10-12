@@ -119,6 +119,15 @@
 	handle @configProviders {
 		respond `{"providers":[]}` 200
 	}
+	# /command、/api/command:斜杠命令目录置空(服务端的 init / review / customize-opencode)
+	@commandV1 path /command /command/
+	handle @commandV1 {
+		respond `[]` 200
+	}
+	@commandV2 path /api/command /api/command/
+	handle @commandV2 {
+		respond `{"location":{},"data":[]}` 200
+	}
 
 	# ④ /config、/global/config:走沙盒内辅助服务的净化代理(去掉 provider 块里的
 	#    网关密钥与内网地址);直接 403 会让前端 bootstrap 报错,故用净化替代
@@ -193,6 +202,8 @@
 			"document.addEventListener('DOMContentLoaded',function(){run();syncAgent();});run();guard();setInterval(guard,800);"+
 			"function keyb(ev){if(!(ev.metaKey||ev.ctrlKey))return;var k=(ev.key||'').toLowerCase();if(k==='k'||k==='n'||k===','||k==='p'||(k==='r'&&ev.shiftKey)){ev.preventDefault();ev.stopImmediatePropagation();}}"+
 			"window.addEventListener('keydown',keyb,true);document.addEventListener('keydown',keyb,true);"+
+			"function slashG(ev){var k=ev.key;if(k!=='/'&&k!=='Enter')return;var t=ev.target;var pi=t&&t.closest?t.closest('[data-component=\"prompt-input\"]'):null;if(!pi)return;var x=(pi.textContent||'').trim();if(k==='/'&&x===''){ev.preventDefault();ev.stopImmediatePropagation();}if(k==='Enter'&&!ev.shiftKey&&x.charAt(0)==='/'){ev.preventDefault();ev.stopImmediatePropagation();}}"+
+			"window.addEventListener('keydown',slashG,true);"+
 			"})();";
 			var inject="<style>"+SEL_CSS+"{display:none!important}"+
 			"[class*=\"md:max-w-200\"],[class*=\"2xl:max-w-[1000px]\"]{max-width:none!important}"+

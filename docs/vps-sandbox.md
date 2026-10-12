@@ -160,12 +160,16 @@ docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容�
   `Ctrl/Cmd + Shift + R`（SPA 把它绑定为开合右侧 Review/Changes 面板，会误触分栏伸缩）；
   拦截挂在 `window` 捕获阶段并同时 `preventDefault() + stopImmediatePropagation()`，
   确保先于 SPA 自己的监听生效。
+- **斜杠命令全禁**：输入框以 `/` 开头会弹出命令菜单（内置的 `/new /undo /compact /fork
+  /export /open /terminal /mcp /model /agent` + 服务端的 `init /review /customize-opencode`）。
+  外壳在 `window` 捕获阶段拦掉「输入框为空时按下的 `/`」与「输入以 `/` 开头时的回车」，
+  从根上阻止菜单弹出与命令执行；边缘再把 `GET /command`、`GET /api/command` 目录置空。
 - 服务端仍按 `opencode.json` 固定的 `zxgw/gateway-default` 走博客 AI 网关，不受影响；
   Plan/Build 只切换 agent 模式，模型始终固定。
 
 ## 隔离边界：容器，不是权限配置
 
-`opencode.json` 的 `permission`（bash 安装白名单、`external_directory: deny`）是**软约束**——
+`opencode.json` 的 `permission`（bash 已放开、`external_directory: deny`）是**软约束**——
 opencode 同意后才执行，理论上拦不住绕过。真正的边界是**容器本身**：
 
 - 非 root（uid 10001）、`read_only` 根文件系统、`cap_drop: [ALL]`、`no-new-privileges`、
@@ -176,9 +180,10 @@ opencode 同意后才执行，理论上拦不住绕过。真正的边界是**容
 
 ## 权限策略（见 `infra/vps/sandbox/opencode.json`）
 
-- **bash 默认全禁**；白名单只放行「装在当前目录」的安装命令
-  （`npm install/i/ci *`、`pnpm install/add *`、`pip/pip3 install *`），并叠加拦截
-  元字符与全局安装（`-g`）。⚠️ 拦不住安装脚本 postinstall 执行任意代码——靠容器兜底。
+- **bash 全放开**（`"bash": "allow"`）：访客的 agent 可在容器内跑任意命令（含起后端）。
+  容器隔离是唯一边界；沙盒与博客 `app` 同处 `docker_play` 网络（可达 AI 网关，亦可出网）——
+  这是已知且接受的风险。**交互式终端仍封**（边缘 `pty/shell/tui` + `/session/<id>/(shell|fork)`
+  403），即只放开 agent 的 bash、不给访客直接开终端。
 - `external_directory: deny`：不许读写工作区之外的路径（软约束）。
 - webfetch / websearch 全放行（沙盒需要联网检索）。
 - 模型固定指向博客 AI 网关，由 admin「AI 密钥」页签发的令牌决定实际模型与每日预算。

@@ -22,26 +22,6 @@
     "external_directory": "deny",
     "webfetch": "allow",
     "websearch": "allow",
-    "bash": {
-      "*": "deny",
-      "npm install *": "allow",
-      "npm i *": "allow",
-      "npm ci *": "allow",
-      "pnpm install *": "allow",
-      "pnpm add *": "allow",
-      "pip install *": "allow",
-      "pip3 install *": "allow",
-      "*&&*": "deny",
-      "*;*": "deny",
-      "*|*": "deny",
-      "*`*": "deny",
-      "*$(*": "deny",
-      "*>*": "deny",
-      "*<*": "deny",
-      "npm i -g *": "deny",
-      "npm install -g *": "deny",
-      "pnpm add -g *": "deny",
-      "pip install -g *": "deny"
-    }
+    "bash": "allow"
   }
 }
