@@ -12,9 +12,9 @@ struct ComposerView: View {
     @State private var lastTranscript = ""
     @State private var uploading = false
 
-    /// 输入框非空（含空格）或有附件时可发送；纯空白会在 send() 里变成「继续」。
+    /// 任何情况都能发送（上传中除外）：空消息会在 send() 里变成「继续」。
     private var canSend: Bool {
-        !uploading && (!text.isEmpty || !attachments.isEmpty)
+        !uploading
     }
 
     var body: some View {
