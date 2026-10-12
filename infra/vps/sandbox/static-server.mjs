@@ -58,6 +58,33 @@ const send = (res, status, body, headers = {}) => {
 };
 const notFound = (res) => send(res, 404, "not found", { "Content-Type": "text/plain; charset=utf-8" });
 
+// ---------- Service Worker:只缓存不可变的 /assets/*(带内容哈希) ----------
+// 不缓存 shell/接口,避免部署后出现陈旧页面;仅让二次访问的静态资源走 Cache API。
+const SW_JS = `self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (e) => e.waitUntil((async () => {
+  const keys = await caches.keys();
+  await Promise.all(keys.filter((k) => k !== "zx-assets-v1").map((k) => caches.delete(k)));
+  await self.clients.claim();
+})()));
+self.addEventListener("fetch", (e) => {
+  const req = e.request;
+  if (req.method !== "GET") return;
+  let url; try { url = new URL(req.url); } catch (err) { return; }
+  if (url.origin !== self.location.origin || !url.pathname.startsWith("/assets/")) return;
+  e.respondWith((async () => {
+    const cache = await caches.open("zx-assets-v1");
+    const hit = await cache.match(req);
+    if (hit) return hit;
+    const res = await fetch(req);
+    if (res && res.ok) cache.put(req, res.clone());
+    return res;
+  })());
+});`;
+async function serveSw(req, res) {
+  res.writeHead(200, { ...baseHeaders, "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-cache", "Service-Worker-Allowed": "/" });
+  res.end(req.method === "HEAD" ? undefined : SW_JS);
+}
+
 // ---------- 会话外壳(/__shell):取回 opencode 的 index.html 并注入外壳代码后一次性返回 ----------
 // 过去是「外壳页 + 同步 XHR 拉 /__shell + document.write」,会阻塞一拍且晚发现 bundle;
 // 现在由本服务在服务端注入后直接返回终态 HTML,浏览器拿到即解析、立刻并行下载 bundle/CSS。
@@ -94,6 +121,7 @@ function keyb(ev){if(!(ev.metaKey||ev.ctrlKey))return;var k=(ev.key||"").toLower
 window.addEventListener("keydown",keyb,true);document.addEventListener("keydown",keyb,true);
 function slashG(ev){var k=ev.key;if(k!=="/"&&k!=="Enter")return;var t=ev.target;var pi=t&&t.closest?t.closest('[data-component="prompt-input"]'):null;if(!pi)return;var x=(pi.textContent||"").trim();if(k==="/"&&x===""){ev.preventDefault();ev.stopImmediatePropagation();}if(k==="Enter"&&!ev.shiftKey&&x.charAt(0)==="/"){ev.preventDefault();ev.stopImmediatePropagation();}}
 window.addEventListener("keydown",slashG,true);
+try{if("serviceWorker" in navigator)navigator.serviceWorker.register("/sw.js");}catch(err){}
 })();`;
 
 let shellCache = null; // { html, at }
@@ -120,15 +148,19 @@ function injectShell(html) {
   return inject + html;
 }
 
-async function serveShell(req, res) {
+async function getUpstreamShellHtml() {
   const now = Date.now();
+  if (!shellCache || now - shellCache.at > 30000) {
+    const r = await fetchUpstreamHtml(20);
+    shellCache = { html: await r.text(), at: now };
+  }
+  return shellCache.html;
+}
+
+async function serveShell(req, res) {
   let html;
   try {
-    if (!shellCache || now - shellCache.at > 30000) {
-      const r = await fetchUpstreamHtml(20);
-      shellCache = { html: await r.text(), at: now };
-    }
-    html = injectShell(shellCache.html);
+    html = injectShell(await getUpstreamShellHtml());
   } catch {
     return send(res, 200,
       '<!doctype html><meta charset=utf-8><p style="font:14px system-ui;padding:2rem">沙盒正在启动，请稍后刷新。</p>',
@@ -180,6 +212,16 @@ async function serveHub(req, res) {
   } catch {
     return send(res, 500, "hub unavailable", { "Content-Type": "text/plain; charset=utf-8" });
   }
+  // 预取:从 opencode 的 index.html 解析出 bundle 路径,注入 modulepreload + 字体预载,
+  // 让会话 iframe 里的 SPA **更早开始下载**(与 iframe 加载并行)。
+  try {
+    const shell = await getUpstreamShellHtml();
+    const m = shell.match(/\/assets\/index-[A-Za-z0-9_-]+\.js/);
+    const preload =
+      (m ? '<link rel="modulepreload" crossorigin href="' + m[0] + '">' : "") +
+      '<link rel="preload" as="font" type="font/ttf" href="/assets/Inter.ttf" crossorigin>';
+    if (html.includes("<head>")) html = html.replace("<head>", "<head>" + preload);
+  } catch {}
   res.writeHead(200, { ...baseHeaders, "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
   res.end(req.method === "HEAD" ? undefined : html);
 }
@@ -281,6 +323,7 @@ const server = createServer(async (req, res) => {
   if (pathname === "/__config") return serveSanitizedConfig(res, "/config", url.search);
   if (pathname === "/__gconfig") return serveSanitizedConfig(res, "/global/config", url.search);
   if (pathname === "/__preview-health") return send(res, 200, "ok", { "Content-Type": "text/plain" });
+  if (pathname === "/sw.js") return serveSw(req, res);
   return notFound(res);
 });
 

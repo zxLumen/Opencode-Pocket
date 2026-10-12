@@ -133,7 +133,8 @@ docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容�
 
 - 入口 `GET /` 不再是固定会话页，而是**工作台**：左=会话 iframe（锁定外壳内），
   右=网站预览 iframe（`/preview/`），**固定分栏**、中间分隔条可拖（比例存
-  localStorage），手机端（<820px）自动改为上下分栏（也可拖）。
+  localStorage），手机端（<820px）自动改为上下分栏（也可拖）。预览 iframe **延迟挂载**：
+  初始 `about:blank`，等会话输入框就绪后才设 `/preview/`（兜底 6s），避免右栏抢首屏资源。
 - 预览**实时性 1 秒级**：工作台每 1 秒 `HEAD /preview/` 探 `Last-Modified` / 长度，
   文件变了才 `reload`（不闪、不丢滚动/画布状态）；另有手动刷新按钮。
 - **静态文件优先**：辅助服务直接读 `/workspace`（不列目录、防穿越）；目录没有
@@ -197,6 +198,12 @@ docker_play 内网 ──► opencode-play 容器（opencode web :4096，同容�
   合法空列表；另用 CSS 隐藏 sonner toast 作兜底（`[data-sonner-toaster]`）。
 - **离屏消息延迟渲染**：对 `[data-component="session-turn"]` 注入
   `content-visibility:auto; contain-intrinsic-size:auto 320px`，首屏先渲染可见部分。
+- **工作台预取**：hub 页由辅助服务注入 `<link rel="modulepreload">`（bundle）与字体预载，
+  让会话 iframe 里的 SPA 更早开始下载（与 iframe 加载并行）。
+- **预览延迟挂载**：右栏等会话输入框就绪后再挂 `/preview/`（见「访客工作台」）。
+- **Service Worker**：只缓存不可变的 `/assets/*`（**不**缓存 shell/接口，避免部署后陈旧）。
+- **首屏消息条数（已实验，未采用）**：SPA 内部默认 `Eke=20` 条；实测补丁改成 6 **不会减少**
+  首屏 DOM（仍 695 节点）与长任务，故不 patch bundle。
 - **命令目录不要边缘拦截**（见「斜杠命令全禁」的警告）。
 
 ## 隔离边界：容器，不是权限配置

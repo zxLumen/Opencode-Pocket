@@ -162,6 +162,11 @@
 		}
 	}
 
+	# Service Worker(只缓存不可变的 /assets/*;避免部署后陈旧页面)
+	handle /sw.js {
+		reverse_proxy opencode-play:47311
+	}
+
 	# ⑥ HTML 文档请求
 	@htmldoc header Accept *text/html*
 	handle @htmldoc {

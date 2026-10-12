@@ -68,7 +68,7 @@
       <span class="spacer"></span>
       <button type="button" id="reload">刷新</button>
     </div>
-    <iframe id="f-site" title="网站预览" src="/preview/"></iframe>
+    <iframe id="f-site" title="网站预览" src="about:blank"></iframe>
   </section>
 </div>
 
@@ -146,10 +146,11 @@
   if (mq.addEventListener) mq.addEventListener("change", layout);
   else if (mq.addListener) mq.addListener(layout);
 
-  // ---- 网站实时预览:每 1 秒探测文件是否变化,变了才刷新(不闪、不丢状态) ----
+  // ---- 网站实时预览:会话可交互后再挂载(先让会话拿到 CPU/带宽) ----
   var site = document.getElementById("f-site");
   var dot = document.getElementById("live-dot");
   var lastTag = null;
+  var started = false;
 
   function reload() { site.src = SITE_URL + "?t=" + Date.now(); }
   document.getElementById("reload").addEventListener("click", reload);
@@ -167,8 +168,26 @@
       })
       .catch(function () { clearTimeout(timer); dot.classList.remove("on"); });
   }
-  probe();
-  setInterval(probe, 1000);
+
+  function startPreview() {
+    if (started) return;
+    started = true;
+    site.src = SITE_URL;
+    probe();
+    setInterval(probe, 1000);
+  }
+
+  // 会话 iframe 同源:轮询到「输入框就绪」再挂预览,避免右栏抢首屏资源
+  var sessionFrame = document.getElementById("f-session");
+  (function waitSession() {
+    try {
+      var d = sessionFrame.contentDocument;
+      if (d && d.querySelector('[data-component="prompt-input"]')) { startPreview(); return; }
+    } catch (e) {}
+    setTimeout(waitSession, 200);
+  })();
+  // 兜底:最多 6 秒后无论如何也把预览挂上
+  setTimeout(startPreview, 6000);
 })();
 </script>
 </body>
