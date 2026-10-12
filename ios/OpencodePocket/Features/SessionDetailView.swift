@@ -414,6 +414,17 @@ struct MessageRow: View {
                 ForEach(Array((message.content ?? []).enumerated()), id: \.offset) { _, part in
                     partView(part)
                 }
+                if let failure = message.failureText {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "exclamationmark.octagon.fill")
+                        Text(failure).multilineTextAlignment(.leading)
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

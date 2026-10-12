@@ -94,11 +94,34 @@ struct Message: Codable, Identifiable, Hashable, Sendable {
     var time: TimeInfo?
     var content: [Part]?
     var text: String?          // 用户/合成消息使用顶层 text
+    var finish: String?        // "stop" / "error" / ...
+    var error: MessageError?   // 失败时服务端把原因挂在消息上（如限流 429）
 
     struct TimeInfo: Codable, Hashable, Sendable {
         var created: Double?
         var streamed: Double?
         var completed: Double?
+    }
+
+    struct MessageError: Codable, Hashable, Sendable {
+        var type: String?
+        var message: String?
+        var status: Int?
+    }
+
+    /// 失败原因（已翻成人话）；无错误时返回 nil。
+    var failureText: String? {
+        guard let e = error else { return finish == "error" ? "执行失败（服务端未返回原因）" : nil }
+        return Message.friendlyFailure(e)
+    }
+
+    static func friendlyFailure(_ e: MessageError) -> String {
+        let raw = (e.message ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let l = raw.lowercased()
+        let isQuota = (e.type ?? "").contains("quota") || e.status == 429
+            || l.contains("rate limit") || l.contains("too many request") || l.contains("quota")
+        let head = isQuota ? "模型限流（Rate limit），稍后重试或换个模型" : "执行失败"
+        return raw.isEmpty ? head : "\(head)：\(raw)"
     }
 
     var isUser: Bool { type == "user" }
