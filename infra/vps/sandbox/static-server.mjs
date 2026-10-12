@@ -90,7 +90,7 @@ async function serveSw(req, res) {
 // 现在由本服务在服务端注入后直接返回终态 HTML,浏览器拿到即解析、立刻并行下载 bundle/CSS。
 // 外壳客户端代码/样式原先内联在 Caddyfile 里,现集中到这里(单一来源、便于维护)。
 const SHELL_CSS = [
-  'header,aside,[data-slot=user-message-meta],[data-slot=text-part-meta],button[data-action=prompt-model],button:has(svg[data-component=provider-icon]),button[aria-label="Choose agent"],button[aria-label="选择智能体"],[class*="max-w-[220px]"],button[aria-label="More options"],button[aria-label="更多选项"],[data-slot="tabs"]{display:none!important}',
+  'header,aside,[data-slot=user-message-meta],[data-slot=text-part-meta],button[data-action=prompt-model],button:has(svg[data-component=provider-icon]),[class*="max-w-[220px]"],button[data-component="icon-button-v2"][aria-haspopup="true"]:not([data-action]),[data-slot="tabs"]{display:none!important}',
   '[class*="md:max-w-200"],[class*="2xl:max-w-[1000px]"]{max-width:none!important}',
   '[data-zx-ag]{display:inline-flex;gap:4px;margin:0 2px;padding:2px;align-items:center}',
   '[data-zx-ag] button{font:12px/1.2 system-ui;color:inherit;background:transparent;border:1px solid rgba(128,128,128,.4);border-radius:999px;padding:2px 10px;cursor:pointer}',
