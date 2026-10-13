@@ -215,6 +215,20 @@ opencode v2.0.x 绑 `0.0.0.0` 时**强制 Basic 鉴权**（不设密码则每次
 - **保留端口**：`4096`（opencode）、`47311`（辅助服务）禁止占用/杀进程；访客后端固定 `8000`。
   辅助服务由 `entrypoint.sh` 的**监督循环常驻**，被误杀会自动拉起（否则整站 404）。
 
+## 访客后端自愈（部署后自动恢复）
+
+访客/助手在 `/workspace` 里起的后端（约定端口 `8000`）跑在容器内，**容器重建（部署）会杀掉所有进程**，
+`/tmp` 也清空；只有卷里的**文件**留着。为让后端「部署后自动回来 + 崩溃自愈」：
+
+- 辅助服务（`static-server.mjs`）常驻 `backendLoop`：每 ~5s 探测 `127.0.0.1:8000`，没在监听就按下面顺序拉起：
+  1. `/workspace/.sandbox-backend`（约定文件，**一行 shell 命令**，首选）；
+  2. `/workspace/launch.js` → `node launch.js`；
+  3. `/workspace/server.js` → `node server.js`；
+  4. `/workspace/package.json` 的 `scripts.start` → `npm start`。
+- 以 detached 方式启动（`PORT=8000`），日志写 `/tmp/opencode/backend.log`。
+- `seed/AGENTS.md` 已要求助手把启动命令写入 `/workspace/.sandbox-backend`。
+- 关掉：`PLAYGROUND_BACKEND_AUTOSTART=0`。
+
 ## 模型封锁（访客不可见 / 不可改）
 
 - **读**：`/api/provider`、`/api/model`、`/api/model/default`、`/api/config` 全部由辅助服务

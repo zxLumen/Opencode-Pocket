@@ -11,14 +11,15 @@
 // 只用 node 内置模块,无依赖;node 是官方 opencode 镜像自带的运行时。
 import { createServer, request as httpRequest } from "node:http";
 import { stat, readFile, mkdir, writeFile, rename } from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { createReadStream, appendFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { extname, join, resolve, sep } from "node:path";
 import { connect as netConnect } from "node:net";
 import { inflateSync, brotliDecompressSync } from "node:zlib";
 import { createHash } from "node:crypto";
 
 const PORT = Number(process.env.SANDBOX_HELPER_PORT || 47311);
-const WORKSPACE = "/workspace";
+const WORKSPACE = process.env.SANDBOX_WORKSPACE || "/workspace";
 const APP_DIST = process.env.SANDBOX_APP_DIST || "/srv/app-dist";
 const HUB_FILE = process.env.SANDBOX_HUB_FILE || "/srv/hub.html";
 const SESSION_ID = process.env.PLAYGROUND_SESSION_ID || "ses_guest";
@@ -28,6 +29,10 @@ const UPSTREAM = process.env.SANDBOX_UPSTREAM || "http://127.0.0.1:4096";
 const UPSTREAM_AUTH = process.env.SANDBOX_UPSTREAM_AUTH || "";
 // 访客应用的**约定后端端口**:预览里的非静态请求(如 /api/*)会反代到它。
 const APP_PORT = Number(process.env.SANDBOX_APP_PORT || 8000);
+// 访客后端自愈:容器重建/进程崩溃后自动把后端拉回来(见 docs/vps-sandbox.md)
+const BACKEND_AUTOSTART = process.env.PLAYGROUND_BACKEND_AUTOSTART !== "0";
+const BACKEND_CMD_FILE = process.env.PLAYGROUND_BACKEND_CMD_FILE || join(WORKSPACE, ".sandbox-backend");
+const BACKEND_LOG = process.env.PLAYGROUND_BACKEND_LOG || "/tmp/opencode/backend.log";
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -363,6 +368,59 @@ function appUp() {
     s.once("timeout", () => finish(false));
     s.once("error", () => finish(false));
   });
+}
+
+// ---------- 访客后端自愈引导 ----------
+// 容器重建会杀掉容器内所有进程(含访客的 server.js / watchdog);这里在辅助服务里
+// 常驻检查约定端口,没在监听就按约定重新拉起后端,实现「部署后自动恢复 + 运行期自愈」。
+function backendLog(msg) {
+  const line = new Date().toISOString() + " " + msg;
+  console.log("[backend] " + msg);
+  try { appendFileSync(BACKEND_LOG, line + "\n"); } catch {}
+}
+async function backendCommand() {
+  // 1) 约定文件:一行 shell 命令(首选)
+  try {
+    const raw = (await readFile(BACKEND_CMD_FILE, "utf8")).trim();
+    if (raw) return raw.split("\n")[0].trim();
+  } catch {}
+  const isFile = async (p) => { try { return (await stat(p)).isFile(); } catch { return false; } };
+  // 2) 常见入口
+  if (await isFile(join(WORKSPACE, "launch.js"))) return "node launch.js";
+  if (await isFile(join(WORKSPACE, "server.js"))) return "node server.js";
+  // 3) package.json 的 scripts.start
+  try {
+    const pkg = JSON.parse(await readFile(join(WORKSPACE, "package.json"), "utf8"));
+    if (pkg && pkg.scripts && pkg.scripts.start) return "npm start";
+  } catch {}
+  return null;
+}
+let backendStarting = false;
+async function backendLoop() {
+  if (!BACKEND_AUTOSTART) { console.log("[backend] 已禁用(PLAYGROUND_BACKEND_AUTOSTART=0)"); return; }
+  console.log("[backend] 后端自愈已启动: port=" + APP_PORT + " cmdFile=" + BACKEND_CMD_FILE);
+  for (;;) {
+    if (!backendStarting && !(await appUp())) {
+      const cmd = await backendCommand();
+      if (cmd) {
+        backendStarting = true;
+        try {
+          const child = spawn("sh", ["-c", cmd], {
+            cwd: WORKSPACE, detached: true, stdio: "ignore",
+            env: { ...process.env, PORT: String(APP_PORT) },
+          });
+          child.unref();
+          backendLog("拉起后端: " + cmd + " (pid " + child.pid + ")");
+        } catch (e) {
+          backendLog("拉起失败: " + ((e && e.message) || e));
+        }
+        await sleep(3000);
+        backendStarting = false;
+        backendLog((await appUp()) ? ("后端就绪 :" + APP_PORT) : "后端未就绪,将继续重试");
+      }
+    }
+    await sleep(5000);
+  }
 }
 
 // 「改模型」强制为网关默认:UI 每次发送前会 POST /api/session/<id>/model。
@@ -1237,3 +1295,5 @@ server.listen(PORT, "0.0.0.0", () => {
 
 // 读回上次的投票状态,再启动直播投票 / 自动接棒的后台循环。
 loadLive().then(startLive).catch((e) => console.error("[live] 初始化失败:", (e && e.message) || e));
+// 访客后端自愈引导(与直播无关,始终启动)。
+backendLoop();

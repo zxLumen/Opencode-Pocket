@@ -72,6 +72,8 @@ services:
       PLAYGROUND_MERGE: ${PLAYGROUND_MERGE:-1}
       PLAYGROUND_MERGE_INTERVAL_MS: ${PLAYGROUND_MERGE_INTERVAL_MS:-30000}
       PLAYGROUND_ADMIN_TOKEN: ${PLAYGROUND_ADMIN_TOKEN:-}
+      # 访客后端自愈(容器重建/崩溃后自动拉起 8000 后端;约定命令文件 /workspace/.sandbox-backend)
+      PLAYGROUND_BACKEND_AUTOSTART: ${PLAYGROUND_BACKEND_AUTOSTART:-1}
       # YouTube 直播聊天采集(官方 Data API v3;API key 读公开聊天)
       YT_API_KEY: ${YT_API_KEY:-}
       YT_VIDEO_ID: ${YT_VIDEO_ID:-}
