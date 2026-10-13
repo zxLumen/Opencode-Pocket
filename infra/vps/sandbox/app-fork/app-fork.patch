@@ -1,5 +1,250 @@
+diff --git a/packages/app/src/session/screen.tsx b/packages/app/src/session/screen.tsx
+index 8080d7af..99da99e0 100644
+--- a/packages/app/src/session/screen.tsx
++++ b/packages/app/src/session/screen.tsx
+@@ -22,7 +22,7 @@ import { SessionPanelFrame } from "@/session/session-frame"
+ import { useExtensionHost } from "@/runtime/extension/host"
+ import { ExtensionLinks } from "@/runtime/extension/render"
+ import { createPanelSidebar, createRegion, DockRegion, MobilePanel } from "@/runtime/extension/panels"
+-import { createMobileViews, MobileViewTabs } from "@/runtime/extension/mobile"
++import { createMobileViews } from "@/runtime/extension/mobile"
+ import { useExtensionAttachment } from "@/runtime/extension/host-apis"
+ import { createMountedSession } from "@/runtime/extension/mounted-session"
+ import { useUsageExceededDialogs } from "./usage-exceeded-dialogs"
+@@ -34,7 +34,6 @@ import { createTimelineSearchController } from "./timeline/search-controller"
+ import { TimelineSearchBar } from "./timeline/search-bar"
+ import { ActiveSessionComposerRegion, createActiveSessionRegion } from "./composer/region"
+ import { SessionIdentityHeader } from "./session-identity-header"
+-import { SessionReviewToggle } from "./header/session-header-actions"
+ import { SessionRunningMenu } from "./header/session-running-menu"
+ import { createAnimatedPresence } from "@/runtime/animated-presence"
+ import { createTimelineCache } from "./timeline/cache"
+@@ -277,23 +276,6 @@ function SessionScreenContent(props: {
+     () => conversationVisible() && messagesReady(),
+   )
+ 
+-  const mobileTabs = () => (
+-    <Show when={session.identity.sessionKey()} keyed>
+-      {(_key) => (
+-        <MobileViewTabs
+-          bottom={bottomMobileTabs()}
+-          screen={props.screen}
+-          views={mobile}
+-          region={region}
+-          current={mobileView()}
+-          session={props.view()}
+-          sidebar={sidebar}
+-          onSelect={selectMobile}
+-        />
+-      )}
+-    </Show>
+-  )
+-
+   const sessionPanelContent = () => (
+     <>
+       <ComposerDropzone
+@@ -301,7 +283,6 @@ function SessionScreenContent(props: {
+         input={composer.drop.input()}
+         identity={session.layout.tabKey}
+       />
+-      <Show when={!isDesktop() && !!session.identity.params.id && !bottomMobileTabs()}>{mobileTabs()}</Show>
+       {/* Surface query errors without suspending session metadata while messages load. */}
+       <Show when={timeline.resource.error}>
+         {(error) => {
+@@ -360,7 +341,6 @@ function SessionScreenContent(props: {
+           <ActiveSessionComposerRegion session={session} model={model} suggestionBoundary={timeline.scroller} />
+         )}
+       </Show>
+-      <Show when={!isDesktop() && !!session.identity.params.id && bottomMobileTabs()}>{mobileTabs()}</Show>
+     </>
+   )
+ 
+@@ -368,18 +348,6 @@ function SessionScreenContent(props: {
+     <>
+       <div class="flex-1 min-h-0 flex flex-col gap-2 px-[var(--shell-inline-inset,8px)] pb-[var(--shell-bottom-inset,8px)] pt-[var(--shell-top-inset,8px)]">
+         <div ref={screen.panel.ref} class="relative flex-1 min-h-0 flex flex-col md:flex-row gap-2">
+-          {/* Keep the control outside panel animations; a side dock's 52px header includes a 1px divider. */}
+-          <Show when={isDesktop() && messagesReady() && session.identity.params.id}>
+-            <div
+-              class="absolute end-3 top-0 z-30 flex items-center"
+-              classList={{ "h-[51px]": sideDockVisible(), "h-12": !sideDockVisible() }}
+-              data-slot="session-review-toggle"
+-              onPointerDown={hideTimelineScrollbar}
+-              onClick={hideTimelineScrollbar}
+-            >
+-              <SessionReviewToggle />
+-            </div>
+-          </Show>
+           <div
+             classList={{
+               "@container relative z-10 min-w-0 shrink-0 flex flex-col min-h-0 h-full flex-1 md:flex-none transition-[width]": true,
+diff --git a/packages/app/src/session/timeline/message-timeline.tsx b/packages/app/src/session/timeline/message-timeline.tsx
+index 09600c0f..c8f02362 100644
+--- a/packages/app/src/session/timeline/message-timeline.tsx
++++ b/packages/app/src/session/timeline/message-timeline.tsx
+@@ -446,160 +446,6 @@ function MessageTimelineView(
+         return content?.type === "tool" && ["edit", "write"].includes(content.name)
+       }}
+       renderRow={(row, onSizeChange) => <rowRenderer.Row row={row} onSizeChange={onSizeChange} />}
+-      header={
+-        <Show when={!props.hideHeader}>
+-          <SessionTitleHeader>
+-            <div class="h-12 w-full flex items-center justify-between gap-2">
+-              <div class="flex items-center gap-1 min-w-0 flex-1">
+-                <div class="flex items-center gap-0.5 min-w-0 flex-1 w-full">
+-                  <SessionProjectMenu
+-                    project={headerProject()}
+-                    directory={sessionDirectory()}
+-                    workspace={workspaceSession()}
+-                  />
+-                  <Show when={parentID()}>
+-                    {(id) => (
+-                      <SessionAncestorTrail
+-                        sessionID={sessionID() ?? ""}
+-                        parentID={id()}
+-                        parentTitle={parentTitle()}
+-                        trailing={!!(childTitle() || title.editing)}
+-                      />
+-                    )}
+-                  </Show>
+-                  <Show when={parentID()}>{runningMenu(childTitle())}</Show>
+-                  <Show when={!parentID() && (childTitle() || title.editing)}>
+-                    <Show
+-                      when={title.editing}
+-                      fallback={
+-                        <h1
+-                          data-slot="session-title-child"
+-                          class="truncate text-[13px] font-[530] leading-4 tracking-[-0.04px] text-v2-text-text-base w-fit rounded-[6px] px-1 py-1 hover:bg-v2-overlay-simple-overlay-hover"
+-                          classList={{ "max-w-[45%] shrink-0": !!parentID() }}
+-                          onClick={openTitleEditor}
+-                        >
+-                          {childTitle()}
+-                        </h1>
+-                      }
+-                    >
+-                      <InlineInput
+-                        ref={(el) => {
+-                          titleRef = el
+-                        }}
+-                        data-slot="session-title-child"
+-                        dir="auto"
+-                        value={title.draft}
+-                        disabled={props.pending.rename()}
+-                        class="block text-[13px] font-[530] leading-4 tracking-[-0.04px] text-v2-text-text-base field-sizing-content rounded-[6px] px-1 py-1"
+-                        classList={{ "max-w-[45%] shrink-0": !!parentID() }}
+-                        style={{
+-                          "--inline-input-shadow": "none",
+-                          "text-align": "start",
+-                        }}
+-                        onInput={(event) => setTitle("draft", event.currentTarget.value)}
+-                        onKeyDown={(event) => {
+-                          event.stopPropagation()
+-
+-                          if (event.isComposing || event.keyCode === 229) return
+-
+-                          if (event.key === "Enter") {
+-                            event.preventDefault()
+-                            void saveTitleEditor()
+-
+-                            return
+-                          }
+-
+-                          if (event.key === "Escape") {
+-                            event.preventDefault()
+-                            closeTitleEditor()
+-                          }
+-                        }}
+-                        onBlur={() => void saveTitleEditor()}
+-                      />
+-                    </Show>
+-                  </Show>
+-                  <Show when={!parentID()}>{runningMenu()}</Show>
+-                  <Show when={!parentID() && sessionID()} keyed>
+-                    {(id) => (
+-                      <Menu
+-                        gutter={6}
+-                        placement="bottom-start"
+-                        open={title.menuOpen}
+-                        onOpenChange={(open) => setTitle("menuOpen", open)}
+-                      >
+-                        <Menu.Trigger
+-                          as={IconButton}
+-                          icon={<Icon name="outline-dots" />}
+-                          variant="ghost-muted"
+-                          size="large"
+-                          class="shrink-0"
+-                          aria-label={language.t("common.moreOptions")}
+-                          aria-expanded={title.menuOpen}
+-                        />
+-                        <Menu.Portal>
+-                          <Menu.Content
+-                            class="session-options-menu w-max"
+-                            style={{ "min-width": "0" }}
+-                            onCloseAutoFocus={(event) => {
+-                              if (!title.pendingRename) return
+-                              event.preventDefault()
+-                              setTitle("pendingRename", false)
+-                              openTitleEditor()
+-                            }}
+-                          >
+-                            <Show when={!parentID()}>
+-                              <Menu.Item
+-                                onSelect={() => {
+-                                  setTitle("pendingRename", true)
+-                                  setTitle("menuOpen", false)
+-                                }}
+-                              >
+-                                {language.t("common.rename")}
+-                              </Menu.Item>
+-                              <Menu.Item onSelect={() => void props.action.export(id)}>
+-                                {language.t("common.export")}…
+-                              </Menu.Item>
+-                            </Show>
+-                            <Show when={!parentID()}>
+-                              {/* TODO: Need a session archive API. */}
+-                              <Menu.Separator />
+-                              <Menu.Item onSelect={() => props.action.showDelete(id)}>
+-                                {language.t("common.delete")}…
+-                              </Menu.Item>
+-                            </Show>
+-                          </Menu.Content>
+-                        </Menu.Portal>
+-                      </Menu>
+-                    )}
+-                  </Show>
+-                </div>
+-              </div>
+-              <Show when={sessionID()} keyed>
+-                {(_id) => (
+-                  <div class="shrink-0 flex items-center gap-2">
+-                    {props.search}
+-                    <ExtensionSlot
+-                      at="session.header"
+-                      input={{
+-                        get session() {
+-                          return props.view
+-                        },
+-                        get screen() {
+-                          return props.screen
+-                        },
+-                        get active() {
+-                          return props.active !== false
+-                        },
+-                      }}
+-                    />
+-                    <SessionHeaderSpacer visible={props.reserveReviewToggle} />
+-                  </div>
+-                )}
+-              </Show>
+-            </div>
+-          </SessionTitleHeader>
+-        </Show>
+-      }
+     />
+   )
+ }
 diff --git a/packages/app/src/shell/routes/routes.tsx b/packages/app/src/shell/routes/routes.tsx
-index 33b0058..9387c28 100644
+index 33b00589..9387c28f 100644
 --- a/packages/app/src/shell/routes/routes.tsx
 +++ b/packages/app/src/shell/routes/routes.tsx
 @@ -15,14 +15,6 @@ export const File = lazy(() => import("@opencode/session-ui/file").then((module)
@@ -54,7 +299,7 @@ index 33b0058..9387c28 100644
          <SettingsSurfaceProvider>
            <ExtensionAttachment>
 diff --git a/packages/app/src/shell/shell.tsx b/packages/app/src/shell/shell.tsx
-index 25bc495..2248f81 100644
+index 25bc4954..2248f816 100644
 --- a/packages/app/src/shell/shell.tsx
 +++ b/packages/app/src/shell/shell.tsx
 @@ -1,92 +1,30 @@
@@ -159,3 +404,111 @@ index 25bc495..2248f81 100644
          <ToastRegion />
          <UploadToastHost />
        </div>
+diff --git a/packages/gui-extensions/src/main.ts b/packages/gui-extensions/src/main.ts
+index 8b5267de..02d2d20b 100644
+--- a/packages/gui-extensions/src/main.ts
++++ b/packages/gui-extensions/src/main.ts
+@@ -1,34 +1,4 @@
+ import { Extension } from "./sdk/main"
+-import context from "./context"
+-import btw from "./btw"
+-import debug from "./debug"
+-import terminal from "./terminal"
+-import file from "./file"
+-import review from "./review"
+-import details from "./details"
+-import browser from "./browser"
+-import pairing from "./pairing"
+-import updater from "./updater"
+-import ssh from "./ssh"
+-import wsl from "./wsl"
+-import microsoftOffice from "./microsoft-office"
+ 
+-/**
+- * Built-in extensions with their main entries. Lists every built-in so their ids stay reserved. `builtins.typecheck.ts`
+- * checks that it provides every Ipc the renderer composition uses.
+- */
+-export const builtins = Extension.compose(
+-  context,
+-  btw,
+-  debug,
+-  terminal,
+-  file,
+-  review,
+-  details,
+-  { ...browser, main: () => import("./browser/main") },
+-  { ...pairing, main: () => import("./pairing/main") },
+-  { ...updater, main: () => import("./updater/main") },
+-  { ...ssh, main: () => import("./ssh/main") },
+-  { ...wsl, main: () => import("./wsl/main") },
+-  microsoftOffice,
+-)
++// 沙盒裁剪版:与 renderer 保持一致 —— 不组合任何内置扩展(见 ./renderer.ts 的说明)。
++export const builtins = Extension.compose()
+diff --git a/packages/gui-extensions/src/renderer.ts b/packages/gui-extensions/src/renderer.ts
+index f5f1754f..41f73ae9 100644
+--- a/packages/gui-extensions/src/renderer.ts
++++ b/packages/gui-extensions/src/renderer.ts
+@@ -1,52 +1,11 @@
+-import { Extension, type Definition } from "./sdk"
+-import context from "./context"
+-import contextRenderer from "./context/renderer"
+-import btw from "./btw"
+-import btwRenderer from "./btw/renderer"
+-import debug from "./debug"
+-import debugRenderer from "./debug/renderer"
+-import terminal from "./terminal"
+-import terminalRenderer from "./terminal/renderer"
+-import file from "./file"
+-import fileRenderer from "./file/renderer"
+-import review from "./review"
+-import reviewRenderer from "./review/renderer"
+-import details from "./details"
+-import detailsRenderer from "./details/renderer"
+-import browser from "./browser"
+-import browserRenderer from "./browser/renderer"
+-import pairing from "./pairing"
+-import pairingRenderer from "./pairing/renderer"
+-import updater from "./updater"
+-import updaterRenderer from "./updater/renderer"
+-import ssh from "./ssh"
+-import sshRenderer from "./ssh/renderer"
+-import wsl from "./wsl"
+-import wslRenderer from "./wsl/renderer"
+-import microsoftOffice from "./microsoft-office"
+-import microsoftOfficeRenderer from "./microsoft-office/renderer"
++import { Extension } from "./sdk"
+ 
+-// The window renders once every built-in is active, so the small renderer entries load with the app, like the
+-// features they replaced. Heavy UI stays behind `lazy()` inside them.
+-const eager = (setup: Awaited<ReturnType<NonNullable<Definition["renderer"]>>>["default"]) => () =>
+-  Promise.resolve({ default: setup })
+-
+-/**
+- * Built-in extensions with their renderer entries. The only place host builds name extensions. `builtins.typecheck.ts`
+- * checks this composition against the main one.
+- */
+-export const builtins = Extension.compose(
+-  { ...context, renderer: eager(contextRenderer) },
+-  { ...btw, renderer: eager(btwRenderer) },
+-  { ...debug, renderer: eager(debugRenderer) },
+-  { ...terminal, renderer: eager(terminalRenderer) },
+-  { ...file, renderer: eager(fileRenderer) },
+-  { ...review, renderer: eager(reviewRenderer) },
+-  { ...details, renderer: eager(detailsRenderer) },
+-  { ...browser, renderer: eager(browserRenderer) },
+-  { ...pairing, renderer: eager(pairingRenderer) },
+-  { ...updater, renderer: eager(updaterRenderer) },
+-  { ...ssh, renderer: eager(sshRenderer) },
+-  { ...wsl, renderer: eager(wslRenderer) },
+-  { ...microsoftOffice, renderer: eager(microsoftOfficeRenderer) },
+-)
++// 沙盒裁剪版:去掉**所有**内置扩展——review(更改/审查)、details(会话详情:分支/仓库/
++// MCP/插件/技能)、context(上下文用量)、terminal、file、browser、ssh、wsl、updater、
++// pairing、debug、btw、microsoft-office。它们只提供侧栏 / 抽屉 / 会话头部入口,
++// 沙盒一律不要(而且顺带去掉 ~35MB office wasm)。
++//
++// 保留一个**空组合**:扩展宿主仍然工作,只是没有任何内置扩展 —— 于是
++// MobileViewTabs(会话|更改|More)、右上「切换审查 / 查看上下文用量 / 会话详情」等
++// 入口在**任何语言**下都不存在(源码级删除,不依赖文案)。
++export const builtins = Extension.compose()

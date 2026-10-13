@@ -153,8 +153,18 @@ opencode v2.0.x 绑 `0.0.0.0` 时**强制 Basic 鉴权**（不设密码则每次
 - `build-app.sh`：`git clone opencode@v2.0.27 tag` → `git apply app-fork.patch` →
   `bun install` → `OPENCODE_CHANNEL=prod bun run --cwd packages/app build`。
   - 必须用 **prod channel**：图标/资源前缀才是 `/icons/prod/*`（dev 是 `/icons/dev/*`）。
-  - `app-fork.patch` 改动 `packages/app/src/shell/shell.tsx`（去标题栏/竖向标签栏）与
-    `packages/app/src/shell/routes/routes.tsx`（去 `/settings`、`/new-session` 路由）。
+  - `app-fork.patch`（6 个文件）**从源码删除**管理入口，而非 CSS 隐藏：
+    - `packages/app/src/shell/shell.tsx`：去标题栏 / 竖向标签栏；
+    - `packages/app/src/shell/routes/routes.tsx`：去 `/settings`、`/new-session` 路由；
+    - `packages/app/src/session/screen.tsx`：去窄屏 `MobileViewTabs`（`会话|更改|More`）与
+      右上「切换审查」(`SessionReviewToggle`)；
+    - `packages/app/src/session/timeline/message-timeline.tsx`：去会话头部整行（标题 / 项目菜单 /
+      `⋯` 重命名·导出·删除 / 运行菜单 / `session.header` Slot）；
+    - `packages/gui-extensions/src/renderer.ts` + `main.ts`：`builtins` 置为**空组合** ——
+      不再加载任何内置扩展（review/details/context/terminal/file/browser/ssh/wsl/updater/
+      pairing/debug/btw/microsoft-office）。副作用：dist 从 ~86MB 降到 ~32MB（去掉 office wasm 等）。
+- **语言无关**：删除的是**源码/组件**，任何语言下都不存在；**绝不用本地化文案或 `aria-label`**
+  做选择器（`session.view.select` 中文是「课次视图」，用英文 aria-label 匹配必然失效）。
 - **sourcemap（方案 B：不进公开镜像，但留档）**：构建产出的 `.map`（约 59MB）由
   `build-app.sh` 分离到 `/build/app-maps`，**运行镜像不含它们**（只 `COPY dist`）；
   CI 用 `docker buildx build --target app-maps --output type=local` 导出为
@@ -165,14 +175,13 @@ opencode v2.0.x 绑 `0.0.0.0` 时**强制 Basic 鉴权**（不设密码则每次
 
 ## 外壳注入（`static-server.mjs`）
 
-裁剪版已去掉了标题栏/标签/设置/新建会话；辅助服务在其之上再注入 `SHELL_CSS` + `SHELL_CLIENT`
-做「访客锁定」：
+管理入口已在**源码里删除**（见上）；辅助服务再注入 `SHELL_CSS` + `SHELL_CLIENT` 做「访客锁定」。
+**原则：语言无关** —— 只用 `data-*` / 元素选择器，**绝不用 `aria-label` 或可见文案**。
 
-- **隐藏残留入口**：`[aria-label="Session view"]`（窄栏下的 `Session | Changes | More...`
-  分段条，会点开更改/更多菜单）、`button[data-action="composer-model"]`（模型选择）、
-  `button[aria-label="Choose model variant"]`、`More options`、`Toggle review`、
-  `Session details`、`View context usage` 等，以及 `[data-slot=user-message-meta]` /
-  `[data-slot=text-part-meta]`（历史消息里的模型名与时长）。
+- **隐藏残留**（语言无关选择器）：`button[data-action="composer-model"]`（模型按钮）、
+  `button[data-component="icon-button-v2"][aria-haspopup="true"]:not([data-action])`，
+  以及 `[data-slot=user-message-meta]` / `[data-slot=text-part-meta]`（历史消息里的模型名与时长）。
+  （`aria-haspopup` 不是本地化文案，跨语言稳定。）
 - **Plan / Build 切换**：注入「Plan | Build」自制按钮（默认 Plan，存 `localStorage`
   键 `zx-sandbox-agent`）；点击发 `POST /api/session/<id>/agent`；进入会话时按需同步服务端
   agent（不一致才 POST，避免无谓 `agent-switched`）。
@@ -317,11 +326,17 @@ Xvfb(虚拟屏 1280x720)
 - **历史消息不参与**：首次连接只记游标，不把开播前的聊天当投票。
 - **合并**：先做文本规范化精确去重（完全相同直接并票）；再每 30s 调一次博客 AI 网关做
   语义合并（意思相近的并成一条、票数相加，保留票数最高那句）。
-- **弹幕审核**（`PLAYGROUND_MODERATE`，默认开，`both`）：先**规则**过滤（纯表情/符号、链接、`@`、
-  刷屏重复、纯数字、屏蔽词 `PLAYGROUND_BLOCKLIST`），再交**博客 AI 网关**判意图——只有「对沙盒的
-  明确指令 `instruction`」进投票；`chitchat`/`comment`（闲聊/吐槽）、`unsafe`（有害）、`injection`
-  （提示注入）一律丢弃。同文本判定**缓存**、每 2s **批量**判定；审核失败默认**放行**
-  （`PLAYGROUND_MODERATE_FAIL=open`）。这一步同时缓解「陌生人文本喂给 agent」的注入风险。
+- **弹幕审核**（`PLAYGROUND_MODERATE`，默认开，`both`）：
+  1. **规则硬拦**（本地、确定性）：纯表情/符号、链接、`@`、刷屏重复、纯数字、屏蔽词
+     `PLAYGROUND_BLOCKLIST`，以及**破坏性/危险模式**（`rm -rf`、格式化、删库、提权、`curl|sh`、
+     「删除/清空 + 全部/工作区/文件」等）。
+  2. **AI 判意图**（博客 AI 网关）：只有「对沙盒的安全、建设性指令 `instruction`」进投票；
+     `risky`（破坏性/危险）、`chitchat`/`comment`（闲聊/吐槽/问「你是谁」）、`unsafe`（有害）、
+     `injection`（提示注入）一律丢弃。
+  - 同文本判定**缓存**、每 2s **批量**；审核失败默认**放行**（`PLAYGROUND_MODERATE_FAIL=open`），
+    但规则硬拦始终生效。
+  - **纵深防御**：注入会话前（`injectTop`）再跑一次危险判定，命中即丢弃、不发送。
+  - 沙盒 `seed/AGENTS.md` 也要求助手**拒绝破坏性请求**。
 - **自动接棒**：监听 `session.idle` / `session.execution.succeeded`（另有 `/api/session/active`
   轮询兜底）→ **只要会话空闲**就把当前票王 `POST /api/session/<id>/prompt` 注入
   `【观众投票 · 第 N 轮】<意见>` → 清零。默认**不设票数门槛、无冷却**（`PLAYGROUND_MIN_VOTES=0`、
