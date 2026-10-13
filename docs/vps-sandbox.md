@@ -257,11 +257,10 @@ opencode v2.0.x 绑 `0.0.0.0` 时**强制 Basic 鉴权**（不设密码则每次
 - **bash 全放开**：访客的 agent 可在容器内跑任意命令（含起后端）。容器隔离是唯一边界。
   **交互式终端仍封**（边缘 `pty/shell/tui` + `/api/session/<id>/(shell|fork)` 403）。
 - `external_directory: deny`：不许读写工作区之外的路径（软约束）。
-- webfetch / websearch 全放行。**搜索与 TUI 同源**：opencode 的 `websearch` 由 `opencode`(Zen)
-  集成**自带**的搜索连接（exa/parallel/tavily/tinyfish…）提供，**与模型走哪个 provider 无关**。
-  沙盒启动时由 entrypoint 用服务器 `.env` 的 `SANDBOX_OPENCODE_ZEN_KEY` 执行
-  `opencode auth import`（v2 凭据存 DB，写 `auth.json` 不生效）导入 Zen 凭据；
-  默认 provider 见 `opencode.json` 的 `websearch.provider`（当前 `exa`）。
+- webfetch / websearch 全放行。**搜索是 opencode 自带的免费匿名能力**（`opencode.websearch.*`：
+  exa/parallel/tavily/tinyfish…，请求由 opencode 侧转发），**无需任何账号凭据**——实测容器在
+  「无任何集成」状态下 `websearch` 依然可用。默认后端见 `opencode.json` 的 `websearch.provider`
+  （当前 `exa`；不设则工具会报 `websearch_provider_required`）。
 - 模型固定指向博客 AI 网关，由 admin「AI 密钥」页签发的令牌决定实际模型与每日预算。
 
 ## 构建与部署

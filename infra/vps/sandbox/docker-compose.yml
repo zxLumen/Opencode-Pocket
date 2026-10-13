@@ -97,10 +97,8 @@ services:
       BILI_SESSDATA: ${BILI_SESSDATA:-}
       BILI_UID: ${BILI_UID:-}
       BILI_BUVID3: ${BILI_BUVID3:-}
-      # 与 TUI 一致的搜索:opencode 的 websearch 由 `opencode`(Zen) 集成自带(见 entrypoint.sh)。
-      # Zen key 用于「搜索」;模型仍走上面的博客网关(预算可控)。
-      SANDBOX_OPENCODE_ZEN_KEY: ${SANDBOX_OPENCODE_ZEN_KEY:-}
-      SANDBOX_OPENCODE_GO_KEY: ${SANDBOX_OPENCODE_GO_KEY:-}
+      # 联网搜索(websearch)是 opencode **自带**的免费匿名能力,无需任何账号凭据;
+      # 默认后端由 opencode.json 的 websearch.provider 指定(见 entrypoint.sh 说明)。
     init: true
     user: "10001:10001"
     read_only: true

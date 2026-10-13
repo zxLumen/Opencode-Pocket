@@ -17,27 +17,10 @@ cp /srv/config-ro/AGENTS.md "$HOME/.config/opencode/AGENTS.md"
 # 不覆盖访客内容。/workspace 挂的是可写卷。
 [ -f /workspace/README.md ] || cp /srv/config-ro/README.md /workspace/README.md 2>/dev/null || true
 [ -f /workspace/AGENTS.md ] || cp /srv/config-ro/AGENTS.md /workspace/AGENTS.md 2>/dev/null || true
-# 与 TUI 一致的搜索:opencode 的 websearch 能力由 `opencode`(Zen) 集成**自带的搜索连接**
-# 提供(exa/firecrawl/parallel/tavily/tinyfish,见二进制里的 opencode.websearch.*),
-# **与模型走哪个 provider 无关**。所以把 Zen 凭据导入沙盒即可;兼容旧的 opencode-go 变量。
-# 注意:opencode v2 的凭据存在 DB 里,写 auth.json **不生效** —— 必须用 `auth import`。
-if [ -n "${SANDBOX_OPENCODE_ZEN_KEY:-}" ] || [ -n "${SANDBOX_OPENCODE_GO_KEY:-}" ]; then
-  {
-    printf '['
-    sep=''
-    if [ -n "${SANDBOX_OPENCODE_ZEN_KEY:-}" ]; then
-      printf '%s{"id":"cred-opencode","integrationID":"opencode","label":"OpenCode Zen","active":true,"value":{"type":"key","key":"%s"}}' \
-        "$sep" "$SANDBOX_OPENCODE_ZEN_KEY"
-      sep=','
-    fi
-    if [ -n "${SANDBOX_OPENCODE_GO_KEY:-}" ]; then
-      printf '%s{"id":"cred-opencode-go","integrationID":"opencode-go","label":"OpenCode Go","active":true,"value":{"type":"key","key":"%s"}}' \
-        "$sep" "$SANDBOX_OPENCODE_GO_KEY"
-    fi
-    printf ']'
-  } | opencode auth import --standalone >/dev/null 2>&1 \
-      || echo "[sandbox-helper] 凭据导入失败(搜索将不可用,但不影响启动)" >&2
-fi
+# 联网搜索(websearch)是 opencode **自带的免费匿名能力**(见二进制里的 opencode.websearch.*:
+# exa/firecrawl/parallel/tavily/tinyfish),请求由 opencode 侧转发,不需要任何账号凭据 ——
+# 实测在「无任何集成」状态下依然可用。默认后端由 opencode.json 的 websearch.provider 指定。
+# 因此这里**不导入任何凭据**(尤其不要把一个匿名可玩的容器和你的账号 key 绑在一起)。
 # 辅助服务(内网 47311,由边缘 Caddy 转发):工作台页 + /config 净化 + /workspace 预览
 # + 访客后端反代。用**监督循环常驻**——即便被误杀(如 agent 腾端口)也自动拉起,
 # 避免整站 404。先起它再起 opencode:它取上游配置时自带重试,不怕 opencode 未就绪。
