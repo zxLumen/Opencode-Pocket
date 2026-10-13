@@ -391,6 +391,10 @@ Xvfb(虚拟屏 1280x720)
   「**强制接棒**」按钮手动触发：`POST /api/session/<id>/interrupt` 清掉僵死 run 并立即接下一棒。
   榜单页同时显示当前轮「已耗时 Xm」。
 - **护栏**：最大轮数（`PLAYGROUND_MAX_ROUNDS`，防无限烧预算）、自动接棒总开关（榜单页右上「⚙」）。
+- **空闲自动创作**（`PLAYGROUND_AUTO_CREATE`）：**没有票 + 会话空闲**时，把「当前 `/workspace/index.html`
+  摘要 + 最近已做 + 引导示例」交给博客 AI 网关，生成**一句**具体、不破坏性的「下一小步」，以
+  `【空闲自动创作】<任务>` 注入（同样强制 build、记入已执行、标注 `【自动】`）。间隔
+  `PLAYGROUND_AUTO_CREATE_INTERVAL_SEC`（默认 45s）；有票时**让位给观众**；上限 `PLAYGROUND_AUTO_CREATE_MAX`（0=不限）。
 - **阻塞处理（question / permission / form）**：agent 提问或申请权限时**暂停意见接棒**（不注入、不拿意见投票答题，
   意见池数据保留）。**question 默认改为「逐题弹幕投票」**（`PLAYGROUND_QUESTION_POLICY=vote`）：
   会话级 form 的每题各开一轮，观众发 `#序号`/选项文字/整句选择语（「第一个」「选2」「1号」等）投票，

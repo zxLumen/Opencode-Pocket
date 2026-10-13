@@ -532,6 +532,10 @@ const USER_COOLDOWN_MS = Number(process.env.PLAYGROUND_USER_COOLDOWN_MS || 3000)
 const GATEWAY_URL = (process.env.PLAYGROUND_GATEWAY_URL || "http://app:3000/api/ai/v1").replace(/\/+$/, "");
 const GATEWAY_MODEL = process.env.PLAYGROUND_GATEWAY_MODEL || "gateway-default";
 const GATEWAY_TOKEN = process.env.ZX_AI_APP_TOKEN || "";
+// 空闲自动创作:没有票 + 会话空闲时,由系统按当前网站情况自动提案,让 AI 持续做合适的创作
+const AUTO_CREATE = process.env.PLAYGROUND_AUTO_CREATE === "1";
+const AUTO_CREATE_MS = Number(process.env.PLAYGROUND_AUTO_CREATE_INTERVAL_SEC || 45) * 1000;
+const AUTO_CREATE_MAX = Number(process.env.PLAYGROUND_AUTO_CREATE_MAX || 0); // 0 = 不限
 const YT_API_KEY = process.env.YT_API_KEY || "";
 const YT_VIDEO_ID = (process.env.YT_VIDEO_ID || "").trim();
 const YT_POLL_MS = Number(process.env.YT_POLL_MS || 0);
@@ -1369,7 +1373,55 @@ async function ensureBuild() {
     }
   } catch {}
 }
-async function injectTop(top) {
+// ---------- 空闲自动创作:没票 + 会话空闲时,按当前情况自动提案让 AI 继续做 ----------
+async function proposeTask() {
+  if (!GATEWAY_TOKEN) return null;
+  let site = "";
+  try {
+    const html = await readFile(join(WORKSPACE, "index.html"), "utf8");
+    const title = ((html.match(/<title>([^<]*)<\/title>/i) || [])[1] || "").trim();
+    site = (title + " " + html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ")).slice(0, 500);
+  } catch {}
+  const recent = live.executed.slice(-8).map((e) => e.text).join(" | ").slice(0, 400);
+  const guide = live.guide && live.guide.examples ? live.guide.examples.join(" | ") : "";
+  try {
+    const sys = "你是无人值守的直播导演。现在没有观众投票,请根据「当前网站情况」和「最近做过的事」,提出【一个】下一小步:具体、可实现、有创意、不破坏性、能明显提升这个网站。用中文,一句话,可直接执行。只输出这句话,不要解释。";
+    const r = await fetch(GATEWAY_URL + "/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
+      body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0.8, messages: [
+        { role: "system", content: sys },
+        { role: "user", content: JSON.stringify({ 当前网站: site, 最近已做: recent, 参考方向: guide }) },
+      ] }),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const c = String((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "")
+      .trim().replace(/^["「【]+|["」】]+$/g, "").split("\n")[0].trim();
+    return c ? c.slice(0, 140) : null;
+  } catch { return null; }
+}
+async function autoCreateLoop() {
+  if (!AUTO_CREATE) return;
+  console.log("[live] 空闲自动创作已启用: 间隔", Math.round(AUTO_CREATE_MS / 1000), "s, 上限", AUTO_CREATE_MAX || "不限");
+  let count = 0;
+  for (;;) {
+    await sleep(5000);
+    if (!LIVE_ENABLED || !live.autoDirect) continue;
+    if (live.blocked) continue;
+    if (live.session !== "idle") continue;
+    if (live.options.length) continue; // 有票就不抢,优先观众
+    if (live.injecting) continue;
+    if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) continue;
+    if (AUTO_CREATE_MAX > 0 && count >= AUTO_CREATE_MAX) continue;
+    if (Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue;
+    const task = await proposeTask();
+    if (!task || task === live.lastSentText) continue;
+    console.log("[live] 空闲自动提案:", task);
+    if (await injectTop({ text: task, votes: 1, voters: [] }, "auto")) count++;
+  }
+}
+async function injectTop(top, src) {
   if (live.injecting) return false;
   if (MODERATE && isRisky(top.text)) { // 仅在开启审核时兜底;默认交给模型判断
     live.options = live.options.filter((o) => o !== top);
@@ -1400,7 +1452,8 @@ async function injectTop(top) {
       return true;
     }
     const sup = supportersText(top);
-    const text = "【观众投票 · 第 " + live.round + " 轮】" + top.text + (sup ? " " + sup : "") +
+    const tag = src === "auto" ? "【空闲自动创作】" : ("【观众投票 · 第 " + live.round + " 轮】");
+    const text = tag + top.text + (sup ? " " + sup : "") +
       "\n（以上是直播间观众投票选出的请求。请你自行判断是否执行：若属于删除/清空/破坏性操作、违法有害、或与本沙盒无关的内容，请礼貌拒绝并简要说明；否则请照做。）";
     await ensureBuild(); // 明确的工作指令 → 强制 build 再发
     try {
@@ -1412,7 +1465,7 @@ async function injectTop(top) {
       if (!r.ok) throw new Error("HTTP " + r.status);
     } catch (e) { console.error("[live] 注入失败:", (e && e.message) || e); return false; }
   } finally { live.injecting = false; }
-  const entry = { round: live.round, text: top.text, votes: top.votes, at: Date.now(), status: "running" };
+  const entry = { round: live.round, text: (src === "auto" ? "【自动】" : "") + top.text, votes: top.votes, at: Date.now(), status: "running" };
   live.executed.push(entry);
   if (live.executed.length > 200) live.executed = live.executed.slice(-200);
   live.currentRun = entry;
@@ -1719,7 +1772,7 @@ function startLive() {
   if (CHAT_SOURCES.includes("youtube")) ytLoop();
   if (CHAT_SOURCES.includes("ingest")) console.log("[live] 弹幕上报(ingest)已启用:POST /__lb/ingest");
   if (!CHAT_SOURCES.includes("bilibili") && !CHAT_SOURCES.includes("youtube") && !CHAT_SOURCES.includes("ingest")) console.log("[live] 未配置弹幕源(YT_API_KEY/YT_VIDEO_ID 或 BILI_ROOM_ID;也可用 ingest 上报)");
-  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); guideLoop(); audienceLoop(); sessionEventLoop(); sessionPollLoop();
+  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); guideLoop(); audienceLoop(); autoCreateLoop(); sessionEventLoop(); sessionPollLoop();
   console.log("[live] 直播投票已启动: 轮次=", live.round, "自动接棒=", live.autoDirect, "最小票数=", MIN_VOTES, "自动合并=", MERGE_ENABLED);
   setTimeout(maybeInject, 5000); // 重启后若已有票且会话空闲,补接一轮
 }
