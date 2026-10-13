@@ -59,6 +59,22 @@ services:
       PLAYGROUND_SESSION_ID: ${PLAYGROUND_SESSION_ID:-ses_guest}
       # UI 上保留的最近会话条数(辅助服务读取;默认 40)
       PLAYGROUND_HISTORY_LIMIT: ${PLAYGROUND_HISTORY_LIMIT:-40}
+      # 直播投票 + 自动接棒(见 docs/vps-sandbox.md「观众投票 → 自动接棒」)
+      PLAYGROUND_LIVE: ${PLAYGROUND_LIVE:-1}
+      PLAYGROUND_AUTODIRECT: ${PLAYGROUND_AUTODIRECT:-1}
+      PLAYGROUND_MIN_VOTES: ${PLAYGROUND_MIN_VOTES:-2}
+      PLAYGROUND_COOLDOWN_SEC: ${PLAYGROUND_COOLDOWN_SEC:-20}
+      PLAYGROUND_MAX_ROUNDS: ${PLAYGROUND_MAX_ROUNDS:-0}
+      PLAYGROUND_MERGE: ${PLAYGROUND_MERGE:-1}
+      PLAYGROUND_MERGE_INTERVAL_MS: ${PLAYGROUND_MERGE_INTERVAL_MS:-30000}
+      PLAYGROUND_ADMIN_TOKEN: ${PLAYGROUND_ADMIN_TOKEN:-}
+      # YouTube 直播聊天采集(官方 Data API v3;API key 读公开聊天)
+      YT_API_KEY: ${YT_API_KEY:-}
+      YT_VIDEO_ID: ${YT_VIDEO_ID:-}
+      # 弹幕源:youtube | bilibili | off(留空 = 按已配置的凭据自动选)
+      CHAT_SOURCE: ${CHAT_SOURCE:-}
+      # B 站直播间号(短号或真实 room_id);匿名读公开弹幕,无需 OAuth
+      BILI_ROOM_ID: ${BILI_ROOM_ID:-}
     init: true
     user: "10001:10001"
     read_only: true
@@ -111,6 +127,35 @@ services:
           && echo "[init] 已补建会话 $$SESSION_ID"
         curl -fsS -u "$$auth" -X PATCH "$$base/api/session/$$SESSION_ID" \
           -H 'content-type: application/json' -d '{"title":"访客沙盒"}' >/dev/null || true
+    networks:
+      - play
+
+  # 无头推流(可选;默认**不启动**,用 `docker compose --profile stream up -d streamer` 开启):
+  #   Xvfb → Chromium 全屏打开沙盒工作台 → ffmpeg 抓屏 → YouTube RTMP。
+  # 镜像由本仓库 CI 构建(见 streamer/);需要服务器 .env 提供 YT_STREAM_KEY(推流密钥)。
+  # 与其它服务一样只在 docker_play 内网,无对外端口;画面来源即 sandbox-caddy 的站点。
+  streamer:
+    image: ghcr.io/zxlumen/opencode-pocket-streamer:${STREAMER_TAG:-latest}
+    profiles: ["stream"]
+    restart: unless-stopped
+    depends_on:
+      - sandbox-caddy
+    environment:
+      # 推流画面(默认沙盒工作台;日后可换成直播版页面)
+      STREAM_URL: ${STREAM_URL:-http://sandbox-caddy/}
+      # YouTube 推流密钥(服务器 .env:YT_STREAM_KEY),保密
+      STREAM_KEY: ${YT_STREAM_KEY:-}
+      STREAM_RTMP: ${STREAM_RTMP:-rtmp://a.rtmp.youtube.com/live2}
+      WIDTH: ${STREAM_WIDTH:-1280}
+      HEIGHT: ${STREAM_HEIGHT:-720}
+      FPS: ${STREAM_FPS:-15}
+      BITRATE: ${STREAM_BITRATE:-2500k}
+      PRESET: ${STREAM_PRESET:-veryfast}
+      START_DELAY: ${STREAM_START_DELAY:-8}
+    # 本机是 2 核,给编码限个额度,别挤垮同机的其它服务
+    cpus: 1.0
+    mem_limit: 1200m
+    shm_size: 256m
     networks:
       - play
 

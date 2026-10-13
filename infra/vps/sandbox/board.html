@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>观众投票 · 直播榜</title>
+<style>
+  :root {
+    --bg: #0b0f14; --card: #141b24; --card2: #1b2430; --line: #263140;
+    --fg: #e6edf3; --dim: #8b98a5; --accent: #3b82f6; --lead: #f59e0b;
+    --ok: #22c55e; --warn: #ef4444;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font: 15px/1.45 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: var(--fg); background: var(--bg); overflow: hidden;
+  }
+  #app { display: flex; flex-direction: column; height: 100dvh; padding: 14px 16px; gap: 12px; }
+
+  header { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  header h1 { font-size: 22px; font-weight: 800; letter-spacing: .5px; }
+  header .round { font-size: 14px; color: var(--dim); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px; }
+  header .spacer { flex: 1 1 auto; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .dot.bad { background: var(--warn); }
+  .pill.on { color: var(--fg); }
+
+  main { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 1.55fr 1fr; gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; display: flex; flex-direction: column; min-height: 0; }
+  .card > h2 { flex: 0 0 auto; font-size: 14px; font-weight: 700; color: var(--dim); padding: 12px 16px 8px; text-transform: none; }
+
+  .list { flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .opt { display: flex; align-items: center; gap: 12px; background: var(--card2); border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; }
+  .opt.lead { border-color: var(--lead); box-shadow: 0 0 0 1px var(--lead) inset; }
+  .opt .rank { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 9px; background: #0e141c; color: var(--dim); display: grid; place-items: center; font-weight: 800; font-size: 16px; }
+  .opt.lead .rank { background: var(--lead); color: #1a1205; }
+  .opt .body { flex: 1 1 auto; min-width: 0; }
+  .opt .text { font-size: 18px; font-weight: 600; word-break: break-word; }
+  .opt .bar { height: 6px; border-radius: 4px; background: #0e141c; margin-top: 7px; overflow: hidden; }
+  .opt .bar > i { display: block; height: 100%; background: linear-gradient(90deg, #2563eb, #60a5fa); border-radius: 4px; transition: width .35s ease; }
+  .opt .votes { flex: 0 0 auto; min-width: 54px; text-align: right; font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .opt .votes small { font-size: 12px; color: var(--dim); font-weight: 600; }
+  .empty { color: var(--dim); padding: 18px 6px; font-size: 15px; }
+
+  .exec { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
+  .run { display: flex; align-items: center; gap: 10px; background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+  .run .rn { flex: 0 0 auto; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .run .rt { flex: 1 1 auto; min-width: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run .rs { flex: 0 0 auto; font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .run .rs.running { color: #fbbf24; border-color: #78350f; }
+  .run .rs.done { color: var(--ok); border-color: #14532d; }
+  .run .rs.failed { color: var(--warn); border-color: #7f1d1d; }
+
+  footer { flex: 0 0 auto; display: flex; align-items: center; gap: 14px; color: var(--dim); font-size: 13px; flex-wrap: wrap; }
+  footer b { color: var(--fg); font-weight: 700; }
+  footer .k { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; color: var(--fg); font-weight: 600; }
+
+  /* 管理条 */
+  #admin { flex: 0 0 auto; display: none; gap: 8px; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; flex-wrap: wrap; }
+  #admin.show { display: flex; }
+  #admin input { background: #0e141c; border: 1px solid var(--line); color: var(--fg); border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 13px; min-width: 220px; }
+  #admin button { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card2); color: var(--fg); cursor: pointer; }
+  #admin button:hover { border-color: var(--accent); }
+  #admin .note { color: var(--dim); font-size: 12px; }
+  #gear { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--dim); cursor: pointer; }
+
+  body.embed #app { padding: 9px; gap: 8px; }
+  body.embed header h1 { font-size: 16px; }
+  body.embed footer { display: none; }
+  body.embed .opt .text { font-size: 15px; }
+  body.embed .opt .votes { font-size: 19px; }
+  body.embed main { grid-template-columns: 1fr; }
+  body.embed .card.exec-card { display: none; } /* 嵌入里只显示投票列,省地方 */
+  body.embed #gear { display: none; }
+
+  @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>观众投票</h1>
+    <span class="round" id="round">第 1 轮</span>
+    <span class="spacer"></span>
+    <span class="pill" id="p-session"><span class="dot"></span><span>会话</span></span>
+    <span class="pill" id="p-yt"><span class="dot"></span><span>弹幕</span></span>
+    <span class="pill" id="p-auto"><span class="dot"></span><span>自动接棒</span></span>
+    <button id="gear" type="button" title="管理">⚙</button>
+  </header>
+
+  <div id="admin">
+    <input id="token" type="password" placeholder="管理令牌 PLAYGROUND_ADMIN_TOKEN">
+    <button data-act="start">开始接棒</button>
+    <button data-act="pause">暂停接棒</button>
+    <button data-act="send">立即发送票王</button>
+    <button data-act="reset">清空本轮票</button>
+    <button data-act="clear-executed">清空已实行</button>
+    <span class="note">令牌存本机,只在本页用</span>
+  </div>
+
+  <main>
+    <section class="card">
+      <h2>本轮候选 · 发弹幕提意见,意思相近的会自动合并计票</h2>
+      <div class="list" id="options"><div class="empty">还没有人提意见…</div></div>
+    </section>
+
+    <section class="card exec-card">
+      <h2>已实行</h2>
+      <div class="exec" id="executed"><div class="empty">暂无</div></div>
+    </section>
+  </main>
+
+  <footer>
+    <span>参与方式:直接发一条<b>意见</b>就是提案;发<b>相同/相近</b>的意见会自动并票;发 <span class="k">#序号</span> 给榜上对应项投票。</span>
+    <span id="minvotes"></span>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  if (/[?&]embed=1/.test(location.search)) document.body.classList.add("embed");
+
+  var $ = function (id) { return document.getElementById(id); };
+  var last = null;
+
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); }
+
+  function render(st) {
+    if (!st) return;
+    last = st;
+    $("round").textContent = "第 " + st.round + " 轮" + (st.maxRounds > 0 ? " / 上限 " + st.maxRounds : "");
+
+    function pill(id, on, label, bad) {
+      var el = $(id);
+      el.classList.toggle("on", !!on);
+      var dot = el.querySelector(".dot");
+      dot.className = "dot" + (on ? " on" : (bad ? " bad" : ""));
+      el.querySelector("span:last-child").textContent = label;
+    }
+    pill("p-session", st.session === "running", st.session === "running" ? "会话 运行中" : (st.session === "idle" ? "会话 空闲" : "会话 …"));
+    var srcName = { youtube: "YouTube", bilibili: "B站", off: "无源" }[st.chat.source] || st.chat.source;
+    var chatLabel = !st.chat.enabled ? "弹幕 未配置" : ("弹幕 " + srcName + (st.chat.connected ? " 已连接" : " 连接中"));
+    pill("p-yt", st.chat.connected, chatLabel, st.chat.enabled && !!st.chat.error);
+    pill("p-auto", st.autoDirect, st.autoDirect ? "自动接棒 开" : "自动接棒 关");
+
+    var max = 1;
+    for (var i = 0; i < st.options.length; i++) max = Math.max(max, st.options[i].votes);
+    var box = $("options");
+    if (!st.options.length) {
+      box.innerHTML = '<div class="empty">还没有人提意见…在直播聊天里发一句试试</div>';
+    } else {
+      var top = st.options.slice(0, 12);
+      box.innerHTML = top.map(function (o, idx) {
+        var pct = Math.round((o.votes / max) * 100);
+        return '<div class="opt' + (idx === 0 ? " lead" : "") + '">' +
+          '<div class="rank">' + o.rank + '</div>' +
+          '<div class="body"><div class="text">' + esc(o.text) + '</div>' +
+          '<div class="bar"><i style="width:' + pct + '%"></i></div></div>' +
+          '<div class="votes">' + o.votes + '<small> 票</small></div></div>';
+      }).join("");
+    }
+
+    var ex = $("executed");
+    if (!st.executed || !st.executed.length) ex.innerHTML = '<div class="empty">暂无</div>';
+    else ex.innerHTML = st.executed.map(function (r) {
+      var label = { running: "执行中", done: "已完成", failed: "失败" }[r.status] || r.status;
+      return '<div class="run"><span class="rn">#' + r.round + '</span>' +
+        '<span class="rt" title="' + esc(r.text) + '">' + esc(r.text) + '</span>' +
+        '<span class="rs ' + r.status + '">' + label + '</span></div>';
+    }).join("");
+
+    $("minvotes").textContent = "本轮票王需 ≥ " + st.minVotes + " 票才会自动发送;发送后清零。";
+  }
+
+  function load() {
+    fetch("/__lb/state", { cache: "no-store" }).then(function (r) { return r.json(); }).then(render).catch(function () {});
+  }
+  load();
+  var es = null;
+  try {
+    es = new EventSource("/__lb/events");
+    es.onmessage = function (e) { try { render(JSON.parse(e.data)); } catch (err) {} };
+    es.onerror = function () {};
+  } catch (err) {}
+  setInterval(function () { if (!es || es.readyState !== 1) load(); }, 3000);
+
+  // ---- 管理 ----
+  var tokenEl = $("token");
+  try { tokenEl.value = localStorage.getItem("zx_admin_token") || ""; } catch (e) {}
+  $("gear").addEventListener("click", function () { $("admin").classList.toggle("show"); });
+  function admin(action, extra) {
+    try { localStorage.setItem("zx_admin_token", tokenEl.value); } catch (e) {}
+    var body = Object.assign({ action: action }, extra || {});
+    fetch("/__lb/admin", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-admin-token": tokenEl.value },
+      body: JSON.stringify(body),
+    }).then(function (r) {
+      if (!r.ok) { alert("管理操作失败:" + r.status + "(检查令牌)"); return null; }
+      return r.json();
+    }).then(function (d) { if (d && d.state) render(d.state); }).catch(function () {});
+  }
+  var btns = $("admin").querySelectorAll("button[data-act]");
+  for (var i = 0; i < btns.length; i++) {
+    (function (b) { b.addEventListener("click", function () { admin(b.getAttribute("data-act")); }); })(btns[i]);
+  }
+})();
+</script>
+</body>
+</html>

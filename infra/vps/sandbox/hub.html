@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>访客沙盒 · 工作台</title>
 <style>
-  :root { --split: 42%; --split-v: 55%; --bar: 10px; }
+  :root { --split: 42%; --split-v: 55%; --bar: 10px; --board-w: 360px; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
   body {
@@ -19,6 +19,9 @@
   #pane-session { flex: 0 0 var(--split); }
   body.stacked #pane-session { flex: 0 0 var(--split-v); }
   #pane-site { flex: 1 1 auto; }
+  #pane-board { flex: 0 0 var(--board-w); border-left: 1px solid #e4e4e7; }
+  body.stacked #pane-board { flex: 0 0 32%; border-left: 0; border-top: 1px solid #e4e4e7; }
+  body.no-board #pane-board { display: none; }
 
   .pane-head {
     flex: 0 0 auto; height: 28px; display: flex; align-items: center; gap: 6px;
@@ -66,9 +69,19 @@
       <b>网站</b>
       <span class="dot" id="live-dot" title="实时监测中"></span>
       <span class="spacer"></span>
+      <button type="button" id="toggle-board">投票</button>
       <button type="button" id="reload">刷新</button>
     </div>
     <iframe id="f-site" title="网站预览" src="about:blank"></iframe>
+  </section>
+
+  <section class="pane" id="pane-board">
+    <div class="pane-head">
+      <b>观众投票</b>
+      <span class="spacer"></span>
+      <button type="button" id="hide-board">收起</button>
+    </div>
+    <iframe id="f-board" title="观众投票" src="/board?embed=1"></iframe>
   </section>
 </div>
 
@@ -91,6 +104,11 @@
     return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
   }
   document.getElementById("f-session").src = "/server/" + b64url(location.origin) + "/session/" + SID;
+
+  // ---- 投票榜开合 ----
+  var boardBtn = document.getElementById("toggle-board");
+  boardBtn.addEventListener("click", function () { document.body.classList.toggle("no-board"); });
+  document.getElementById("hide-board").addEventListener("click", function () { document.body.classList.add("no-board"); });
 
   // ---- 分栏拖拽(横向;手机端纵向) ----
   var bar = document.getElementById("bar");

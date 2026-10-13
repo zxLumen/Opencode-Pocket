@@ -80,6 +80,12 @@
 		import to_helper
 	}
 
+	# ②b 直播投票:榜单状态 / SSE / 管理(交给辅助服务;管理由 token 保护)
+	@liveBoard path_regexp ^/__lb(/|$)
+	handle @liveBoard {
+		import to_helper
+	}
+
 	# ③ 模型/配置「净化」:剥掉网关密钥,只暴露「博客 AI 网关」与其默认模型。
 	#    (opencode v2.0.x 的 /api/provider、/api/model、/api/model/default 响应里
 	#     settings 会带 apiKey,必须由辅助服务净化。)
@@ -158,6 +164,12 @@
 		handle @atSession {
 			header Content-Type "text/html; charset=utf-8"
 			rewrite * /__shell
+			import to_helper
+		}
+		# 直播投票榜页(OBS / 直播画面用;工作台内也以 iframe 内嵌)
+		@boardDoc path /board
+		handle @boardDoc {
+			rewrite * /__board
 			import to_helper
 		}
 		# 其它文档请求一律拉回工作台

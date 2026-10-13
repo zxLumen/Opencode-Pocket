@@ -44,9 +44,13 @@ infra/vps/sandbox/
 ├── opencode.json       # 基准配置（烤进镜像只读区，运行时改动重启即还原）
 ├── static-server.mjs   # 容器内辅助服务(:47311):提供裁剪版 UI / 净化模型与配置 / 工作台 / 预览
 ├── hub.html            # 工作台页(固定分栏 + 1s 实时预览 + 手机端上下分栏)
+├── board.html          # 直播投票榜页(实时票榜 + 已实行;OBS/直播画面 & 工作台内嵌)
 ├── seed/               # 播种到工作区/家目录的助手说明与 README（仅缺失时写）
 │   ├── AGENTS.md
 │   └── README.md
+├── streamer/           # 无头推流容器（Xvfb + Chromium + ffmpeg → YouTube RTMP；默认不开）
+│   ├── Dockerfile
+│   └── stream.sh
 ├── Caddyfile           # 边缘 Caddy：全部「访客锁定 + 工作台 + 模型封锁 + 上游鉴权注入」逻辑
 ├── docker-compose.yml  # 三服务：sandbox-caddy / opencode-play / opencode-play-init
 ├── deploy.sh           # 部署（拉镜像 → reload 边缘 Caddy → up -d → 回收旧镜像）
@@ -262,6 +266,97 @@ crontab -e   # 追加上面那条 */3
 
 博客侧只需在 `docker/Caddyfile` 保留 stub（`code-sandbox` 段 3 行转发到 `sandbox-caddy:80`），
 并在博客 compose 里让 `app` / `caddy` 与沙盒同处 `docker_play` 网络。
+
+## 无头推流（可选，无需本地电脑）
+
+目标：把沙盒画面自动推到 YouTube 开播，**全程无人值守**——不必留一台电脑开 OBS。
+
+```
+Xvfb(虚拟屏 1280x720)
+  → Chromium kiosk 全屏打开 http://sandbox-caddy/（沙盒工作台）
+  → ffmpeg x11grab 抓屏 → H.264 + 静音音轨 → RTMP → YouTube
+```
+
+- 实现：`streamer/`（`Dockerfile` + `stream.sh`），镜像由本仓库 CI 构建为
+  `ghcr.io/<owner>/opencode-pocket-streamer`；compose 里是 **`streamer` 服务、带 `profile: stream`**，
+  因此 `deploy.sh` 的默认 `up -d` **不会**启动它（不推流时不占 CPU/内存）。
+- 开启：
+  ```bash
+  # 1) 服务器 .env 写入推流密钥(YouTube Studio → 直播 → 推流 → 推流密钥)
+  echo 'YT_STREAM_KEY=xxxx-xxxx-xxxx-xxxx-xxxx' >> ~/Opencode-Pocket/sandbox/.env
+  # 2) 开播 / 关播 / 看日志
+  cd ~/Opencode-Pocket/sandbox
+  docker compose --profile stream up -d streamer
+  docker compose --profile stream stop streamer
+  docker logs -f sandbox-streamer-1
+  ```
+- 画面来源 `STREAM_URL` 默认沙盒工作台（会话 + 网站预览）；日后做好「直播版/投票榜」页可改为它。
+- 可调项（`.env`，均有默认值）：`STREAM_WIDTH/HEIGHT`（默认 1280×720）、`STREAM_FPS`（15）、
+  `STREAM_BITRATE`（2500k）、`STREAM_PRESET`（veryfast；本机 2 核可改 `ultrafast`）、`STREAM_RTMP`。
+- **CPU 提示**：本机 2 核且已在跑博客/监控/多个子应用，容器已限 `cpus: 1.0`。若开播后卡顿，
+  降 `STREAM_FPS`（如 10）、`STREAM_PRESET=ultrafast`、`STREAM_BITRATE=1800k`。
+
+> YouTube 端：视频流一到，直播与聊天（弹幕）即开启。推流密钥只放服务器 `.env`，**不要入库**。
+
+## 观众投票 → 自动接棒（直播弹幕驱动）
+
+目标：你开播（无头推流或本地 OBS 均可），**观众在直播聊天里提意见**；沙盒把相同/相近的意见
+**合并计票**，每当会话**本轮任务跑完**，就自动把**票数最高**的意见发给模型继续，**发送后清零重来**；
+观众在直播画面（沙盒里的「观众投票」栏 / `GET /board` 页）能看到**实时票榜**与**已实行列表**。
+
+```
+观众弹幕(意见) ─► 辅助服务:规范化精确去重 + AI 语义合并 ─► 票榜(实时)
+                                                          │
+  会话本轮跑完(session.idle) ◄─ 注入 POST /prompt ◄─ 取票王(≥最小票数)
+                                                          │
+                                       清零 + 记入「已实行」
+```
+
+- **参与方式**（写在榜单页底部）：直接发一条意见 = 提案；发**相同/相近**的意见会自动并票；
+  发 `#序号` 给榜上对应项投票。每人每项只计一票（按 YouTube 频道 ID）+ 每人限频。
+- **历史消息不参与**：首次连接只记游标，不把开播前的聊天当投票。
+- **合并**：先做文本规范化精确去重（完全相同直接并票）；再每 30s 调一次博客 AI 网关做
+  语义合并（意思相近的并成一条、票数相加，保留票数最高那句）。
+- **自动接棒**：监听 `session.idle` / `session.execution.succeeded`（另有 `/api/session/active`
+  轮询兜底）→ 校验「总开关 / 冷却 / 最小票数 / 非上一条」→ `POST /api/session/<id>/prompt`
+  注入 `【观众投票 · 第 N 轮】<意见>` → 清零。失败只标记、不自动接棒。
+- **护栏**：最小票数、冷却秒数、最大轮数（防无限烧预算）、自动接棒总开关（榜单页右上「⚙」）。
+- **状态持久化**：`/home/opencode/.local/state/sandbox/live.json`（家目录卷，部署/重启不丢）。
+
+**端点**（辅助服务；Caddy 已放行 `^/__lb/` 与 `GET /board`）：
+
+| 端点 | 用途 |
+| --- | --- |
+| `GET /board` | 直播投票榜页（实时票榜 + 已实行；`?embed=1` 供工作台内嵌） |
+| `GET /__lb/state` | 当前状态 JSON（轮次/会话/票榜/已实行/开关） |
+| `GET /__lb/events` | 状态 SSE（榜单毫秒级刷新） |
+| `POST /__lb/admin` | 管理：`start`/`pause`/`reset`/`send`/`clear-executed`/`add`；请求头 `x-admin-token` |
+
+**弹幕源**：`CHAT_SOURCE=youtube|bilibili|off`（留空则按已配置的凭据自动选）。
+
+- **YouTube**：`YT_API_KEY` + `YT_VIDEO_ID`（新频道开播有 24h 等待）。
+- **B 站**：`BILI_ROOM_ID=<直播间号>`——匿名读公开弹幕（先取 buvid 指纹 + **WBI 签名** 调
+  `getDanmuInfo` 拿 token/节点，再连 WebSocket；`node:zlib` 解 brotli/zlib 压缩，`node:crypto` 做签名），
+  无需 OAuth/登录，榜单显示 `B站`。**注意**：匿名直连会被风控（`-352`），必须走 WBI 签名这条路径。
+  B 站**开播**需实名认证，但**读弹幕/试水**可先用任意公开房间验证链路。
+
+**开启**：
+
+```bash
+cat >> ~/Opencode-Pocket/sandbox/.env <<'EOF'
+# 二选一:B 站(先用这个试水)或 YouTube
+BILI_ROOM_ID=<你的 B 站直播间号>
+# YT_API_KEY=<...>
+# YT_VIDEO_ID=<...>
+PLAYGROUND_ADMIN_TOKEN=<足够随机的字符串>
+EOF
+cd ~/Opencode-Pocket/sandbox && ./deploy.sh latest   # .env 变更后 up -d 重建生效
+```
+
+- `YT_VIDEO_ID` 支持裸 id 或完整 `https://www.youtube.com/watch?v=...`（自动解析）。
+- 直播**未开始**时拿不到 `liveChatId`，每 15s 重试；榜页「弹幕」状态显示连接中。
+- 建议先 `.env` 设 `PLAYGROUND_AUTODIRECT=0`（只投票不发送）验证弹幕/合并/榜单，再开自动接棒。
+- 无弹幕时可手动造一条测试：`POST /__lb/admin` body `{"action":"add","text":"..."}`（带 token）。
 
 ## 运维要点
 

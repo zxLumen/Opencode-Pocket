@@ -58,6 +58,26 @@ jobs:
             ${{ steps.img.outputs.sandbox }}:${{ github.sha }}
             ${{ steps.img.outputs.sandbox }}:latest
 
+      # 无头推流镜像(Xvfb + Chromium + ffmpeg → YouTube RTMP)。仅当服务器用
+      # `--profile stream` 启动 streamer 服务时才用到;默认部署不碰它。
+      - name: Compute streamer image name (lowercase)
+        id: simg
+        run: |
+          echo "streamer=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/opencode-pocket-streamer" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push streamer image
+        uses: docker/build-push-action@v6
+        with:
+          context: infra/vps/sandbox/streamer
+          file: infra/vps/sandbox/streamer/Dockerfile
+          push: true
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: |
+            ${{ steps.simg.outputs.streamer }}:${{ github.sha }}
+            ${{ steps.simg.outputs.streamer }}:latest
+
       # sourcemap 方案 B:裁剪版 Web UI 的 .map 不进公开镜像,但按「该次构建」留档。
       # 复用上面构建阶段(GHA cache 命中 → 秒级),只把 Dockerfile 的 app-maps 阶段
       # 导出到 runner,再作为 artifact 上传。出事时用同一 sha 的 artifact 还原源码栈。
