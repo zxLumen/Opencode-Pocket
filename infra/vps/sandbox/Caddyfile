@@ -38,6 +38,17 @@
 	# ⓪ 响应压缩(bundle 较大;SSE 带 no-transform 会自动跳过)
 	encode zstd gzip
 
+	# ⓪a 私有管理入口:给 pocket App 直连(绕过访客锁定),由 opencode 自身 Basic Auth 鉴权。
+	#     pocket 端:地址 https://code-sandbox.<域名>/__admin-api,用户 opencode,密码 = PLAYGROUND_SERVER_PASSWORD。
+	@adminApi path_regexp ^/__admin-api(/|$)
+	handle @adminApi {
+		uri strip_prefix /__admin-api
+		reverse_proxy opencode-play:4096 {
+			header_up -Cookie
+			flush_interval -1
+		}
+	}
+
 	# ① 危险族:读+写全封(文件系统 / PTY / shell 执行 / 凭据 / MCP / 集成 / 插件 /
 	#    debug / experimental / rpc / 配对 / 配置 shell)。这些能力对公开沙盒一律不可达。
 	@bannedFamily path_regexp ^/api/(fs|pty|credential|mcp|integration|plugin|debug|experimental|rpc|pair|tui)(/|$)

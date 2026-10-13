@@ -412,6 +412,10 @@ cd ~/Opencode-Pocket/sandbox && ./deploy.sh latest   # .env 变更后 up -d 重�
 - 建议先 `.env` 设 `PLAYGROUND_AUTODIRECT=0`（只投票不发送）验证弹幕/合并/榜单，再开自动接棒。
 - 无弹幕时可手动造一条测试：`POST /__lb/admin` body `{"action":"add","text":"..."}`（带 token）。
 
+> 会话页是**纯展示**（隐藏了输入区/组件，只留消息时间线）。要干预沙盒会话，用 pocket App 连
+> **私有管理入口**：`https://code-sandbox.<域名>/__admin-api`，用户名 `opencode`，密码 = `PLAYGROUND_SERVER_PASSWORD`
+> （该路径绕过访客锁定、直连沙盒 opencode，由 opencode 自身 Basic Auth 鉴权）。
+
 ## 运维要点
 
 - **清空沙盒**：`docker compose -f ~/Opencode-Pocket/sandbox/docker-compose.yml rm -sf opencode-play`

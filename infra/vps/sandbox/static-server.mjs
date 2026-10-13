@@ -102,6 +102,7 @@ async function serveSw(req, res) {
 // 管理入口已在源码里删除(见 app-fork.patch:空 builtins + 去 review toggle/mobile tabs/会话头),
 // 这里只保留与语言无关的收尾:隐藏模型按钮、宽会话栏铺满、注入 Plan/Build。
 const SHELL_CSS = [
+  '[data-component="session-composer-dock"]{display:none!important}',
   '[data-slot=user-message-meta],[data-slot=text-part-meta],[data-slot="tabs"]{display:none!important}',
   'button[data-action="composer-model"],button.composer-variant-default,button[data-component="icon-button-v2"][aria-haspopup="true"]:not([data-action]){display:none!important}',
   '[class*="md:max-w-200"],[class*="2xl:max-w-[1000px]"]{max-width:none!important}',
@@ -1254,7 +1255,7 @@ function supportersText(opt) {
 async function writeAudience() {
   try { await mkdir(WORKSPACE, { recursive: true }); await writeFile(join(WORKSPACE, "audience.json"), JSON.stringify(audiencePublic())); } catch {}
 }
-async function audienceLoop() { for (;;) { await sleep(10000); if (audienceDirty) { audienceDirty = false; await writeAudience(); } } }
+async function audienceLoop() { for (;;) { await sleep(3000); if (audienceDirty) { audienceDirty = false; await writeAudience(); } } }
 
 // ---------- 空票时的智能引导(网关生成 2-3 条可发弹幕的示例) ----------
 async function genGuide() {
