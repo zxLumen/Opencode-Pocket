@@ -75,6 +75,8 @@ services:
       PLAYGROUND_QUESTION_VOTE_SEC: ${PLAYGROUND_QUESTION_VOTE_SEC:-20}
       # 无人投票时的兜底作答时限(秒):超时就自动选第一项,避免 question 永久卡住
       PLAYGROUND_QUESTION_FALLBACK_SEC: ${PLAYGROUND_QUESTION_FALLBACK_SEC:-45}
+      # 上游请求超时(毫秒):避免上游挂死导致注入卡住/永不释放
+      PLAYGROUND_UPSTREAM_TIMEOUT_MS: ${PLAYGROUND_UPSTREAM_TIMEOUT_MS:-25000}
       PLAYGROUND_PERMISSION_POLICY: ${PLAYGROUND_PERMISSION_POLICY:-reject}
       # 弹幕操控网站预览(滚动/点开/返回/刷新),并入意见票池,5s 用票首执行
       PLAYGROUND_SITE_CMD: ${PLAYGROUND_SITE_CMD:-1}
