@@ -1619,6 +1619,48 @@ async function proposePlan() {
     return { action: action, page: page, title: title, task: task, before: before, after: after };
   } catch { return null; }
 }
+// ---------- 观众视角校验:操作做完后"再看一眼"当前这一屏,是否已达成目标;没达到就补一个操作 ----------
+async function viewState(page) {
+  try {
+    const p = join(WORKSPACE, page || "index.html");
+    const h = await readFile(p, "utf8");
+    const strip = (s) => String(s || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    const title = ((h.match(/<title>([^<]*)<\/title>/i) || [])[1] || "").trim();
+    const labels = [];
+    const re = /<(button|a|h1|h2|h3)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+    let m;
+    while ((m = re.exec(h)) && labels.length < 20) { const t = strip(m[2]).slice(0, 16); if (t) labels.push(t); }
+    const text = strip(h.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")).slice(0, 300);
+    return { file: page, title: title, 可点元素: Array.from(new Set(labels)), 可见文字: text };
+  } catch { return null; }
+}
+async function verifyView(goal, page) {
+  if (!GATEWAY_TOKEN || !page) return null;
+  const st = await viewState(page);
+  if (!st) return null;
+  try {
+    const sys = "你是直播导演。观众只能看**一屏**、且不会自己操作。给你『目标』和『当前页面状态』,判断观众此刻看到的是否已经达成目标;" +
+      "若没有,给出**一个**能让观众更接近目标的页面操作(例如点开某个按钮进入玩法/开始游戏)。已达成就不给。\n" +
+      "只输出 JSON:{\"ok\":true|false,\"op\":{\"type\":\"click\",\"text\":\"按钮文字\"}|null,\"why\":\"一句\"}。op 仅支持 click/goto/scroll/back/reload;不需要就 op:null。不要解释。";
+    const r = await fetch(GATEWAY_URL + "/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
+      body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0.3, messages: [
+        { role: "system", content: sys },
+        { role: "user", content: JSON.stringify({ 目标: goal, 当前页面: st }) },
+      ] }),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const c = String((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "");
+    const s = c.indexOf("{"), e = c.lastIndexOf("}");
+    if (s < 0 || e < s) return null;
+    let o; try { o = JSON.parse(c.slice(s, e + 1)); } catch { return null; }
+    const op = (o && !o.ok) ? sanitizeSite(o.op) : null;
+    console.log("[live] 观众视角校验:", (o && o.why) || "", op ? JSON.stringify(op) : "(已达标)");
+    return op;
+  } catch { return null; }
+}
 async function waitIdle(timeoutMs) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
@@ -1663,6 +1705,14 @@ async function autoCreateLoop() {
     await waitIdle(180000);
     // 4) after:切过去让观众看到效果 —— 同样并入票池(观众可见/可投票)
     if (plan.after && SITE_CMD_ENABLED) enqueueSiteAuto(plan.after);
+    // 5) 观众视角校验:做完操作后再"看一眼"当前这一屏是否达标;不达标就补操作(最多 2 次)
+    for (let k = 0; k < 2; k++) {
+      await sleep(SITE_VOTE_MS + 1500);
+      if (!SITE_CMD_ENABLED) break;
+      const op = await verifyView(plan.task, plan.page || live.page);
+      if (!op) break;
+      enqueueSiteAuto(op);
+    }
     live.lastInjectAt = Date.now();
     changed();
   }
