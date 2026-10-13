@@ -1042,16 +1042,20 @@ function finishRun(kind) {
   const e = live.currentRun;
   if (e && e.status === "running") { e.status = kind; live.currentRun = null; changed(); }
 }
-// 明确的工作指令:注入前强制 build(保证执行,避免被切到 plan 后白跑)
+// 明确的工作指令:注入前强制 build(保证执行)。
+// 不看 live.agent —— 它靠 agent-switched 事件维护,事件缺失时会滞后(实测踩过),
+// 所以每次工作指令都无条件 POST 一次(幂等 204)。
 async function ensureBuild() {
-  if (live.agent === "build") return;
   try {
     const r = await upstreamFetch("/api/session/" + encodeURIComponent(SESSION_ID) + "/agent", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ agent: "build" }),
     });
-    if (r.ok) { live.agent = "build"; console.log("[live] 工作指令 → 强制 build"); }
+    if (r.ok) {
+      if (live.agent !== "build") console.log("[live] 工作指令 → 强制 build");
+      live.agent = "build";
+    }
   } catch {}
 }
 async function injectTop(top) {
