@@ -544,11 +544,14 @@ const BILI_BUVID3 = String(process.env.BILI_BUVID3 || "").trim();
 const CHAT_SOURCE = String(
   process.env.CHAT_SOURCE || (YT_API_KEY && YT_VIDEO_ID ? "youtube" : BILI_ROOM_ID ? "bilibili" : "off"),
 ).toLowerCase();
+// 可多源:CHAT_SOURCE=bilibili,douyin,ingest(逗号分隔)。ingest = 外部(本机桥接等)上报。
+const CHAT_SOURCES = CHAT_SOURCE.split(",").map((s) => s.trim()).filter(Boolean);
+const INGEST_TOKEN = String(process.env.PLAYGROUND_INGEST_TOKEN || "").trim() || ADMIN_TOKEN || "";
 const BOARD_FILE = process.env.SANDBOX_BOARD_FILE || "/srv/board.html";
 const STATE_DIR = process.env.PLAYGROUND_STATE_DIR || join(process.env.HOME || "/home/opencode", ".local/state/sandbox");
 const STATE_FILE = join(STATE_DIR, "live.json");
 
-const chatEnabled = CHAT_SOURCE === "youtube" ? Boolean(YT_API_KEY && YT_VIDEO_ID) : CHAT_SOURCE === "bilibili" ? Boolean(BILI_ROOM_ID) : false;
+const chatEnabled = CHAT_SOURCES.some((s) => (s === "youtube" && YT_API_KEY && YT_VIDEO_ID) || (s === "bilibili" && BILI_ROOM_ID) || s === "ingest");
 let live = {
   round: 1,
   autoDirect: AUTO_DIRECT_DEFAULT,
@@ -567,7 +570,7 @@ let live = {
   siteFirstAt: null,
   guide: null, // { examples:[...], at }
   audience: {}, // channelId -> { name, at, votes }
-  chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, loggedIn: Boolean(BILI_SESSDATA), chatId: null, videoId: YT_VIDEO_ID || null, detail: CHAT_SOURCE === "bilibili" ? (BILI_ROOM_ID || null) : (YT_VIDEO_ID || null), lastAt: 0, error: null },
+  chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, loggedIn: Boolean(BILI_SESSDATA), chatId: null, videoId: YT_VIDEO_ID || null, detail: [CHAT_SOURCES.includes("bilibili") && BILI_ROOM_ID ? "bili:" + BILI_ROOM_ID : "", CHAT_SOURCES.includes("youtube") && YT_VIDEO_ID ? "yt:" + YT_VIDEO_ID : "", CHAT_SOURCES.includes("ingest") ? "ingest" : ""].filter(Boolean).join(" ") || null, lastAt: 0, error: null },
 };
 
 async function loadLive() {
@@ -1712,9 +1715,10 @@ async function biliLoop() {
 
 function startLive() {
   if (!LIVE_ENABLED) { console.log("[live] 已禁用(PLAYGROUND_LIVE=0)"); return; }
-  if (CHAT_SOURCE === "bilibili") biliLoop();
-  else if (CHAT_SOURCE === "youtube") ytLoop();
-  else console.log("[live] 未配置弹幕源(YT_API_KEY/YT_VIDEO_ID 或 BILI_ROOM_ID)");
+  if (CHAT_SOURCES.includes("bilibili")) biliLoop();
+  if (CHAT_SOURCES.includes("youtube")) ytLoop();
+  if (CHAT_SOURCES.includes("ingest")) console.log("[live] 弹幕上报(ingest)已启用:POST /__lb/ingest");
+  if (!CHAT_SOURCES.includes("bilibili") && !CHAT_SOURCES.includes("youtube") && !CHAT_SOURCES.includes("ingest")) console.log("[live] 未配置弹幕源(YT_API_KEY/YT_VIDEO_ID 或 BILI_ROOM_ID;也可用 ingest 上报)");
   mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); guideLoop(); audienceLoop(); sessionEventLoop(); sessionPollLoop();
   console.log("[live] 直播投票已启动: 轮次=", live.round, "自动接棒=", live.autoDirect, "最小票数=", MIN_VOTES, "自动合并=", MERGE_ENABLED);
   setTimeout(maybeInject, 5000); // 重启后若已有票且会话空闲,补接一轮
@@ -1741,6 +1745,28 @@ function serveLiveEvents(req, res) {
   sseClients.add(res);
   const hb = setInterval(() => { try { res.write(": hb\n\n"); } catch {} }, 15000);
   req.on("close", () => { clearInterval(hb); sseClients.delete(res); });
+}
+// 外部弹幕上报(本机桥接/第三方):POST /__lb/ingest,头 x-ingest-token。
+// body: {platform,user,text} 或 {messages:[{platform,user,text},...]} → 进同一个投票池。
+async function handleIngest(req, res) {
+  if (!INGEST_TOKEN) return send(res, 403, "ingest disabled", { "Content-Type": "text/plain; charset=utf-8" });
+  const url = new URL(req.url, "http://localhost");
+  const token = req.headers["x-ingest-token"] || url.searchParams.get("token") || "";
+  if (token !== INGEST_TOKEN) return send(res, 403, "forbidden", { "Content-Type": "text/plain; charset=utf-8" });
+  let body = {};
+  try { body = JSON.parse((await readBody(req)) || "{}"); } catch {}
+  const list = Array.isArray(body.messages) ? body.messages : [body];
+  let n = 0;
+  for (const m of list) {
+    const text = String((m && m.text) || "").trim();
+    if (!text) continue;
+    const platform = String((m && m.platform) || "ingest").toLowerCase();
+    const user = String((m && (m.user || m.uid)) || "");
+    if (!allowUser(platform + ":" + user, Date.now())) continue;
+    handleChat(text, platform + ":" + user);
+    n++;
+  }
+  return json(res, { ok: true, accepted: n, options: publicState().options });
 }
 function readBody(req, limit = 1e6) {
   return new Promise((resolve) => {
@@ -1786,6 +1812,10 @@ const server = createServer(async (req, res) => {
   if (pathname === "/__lb/admin") {
     if (req.method !== "POST") return send(res, 405, "method not allowed");
     return handleAdmin(req, res);
+  }
+  if (pathname === "/__lb/ingest") {
+    if (req.method !== "POST") return send(res, 405, "method not allowed");
+    return handleIngest(req, res);
   }
 
   // 「改模型」:忽略请求体,强制网关默认模型(见 serveForcedModel)

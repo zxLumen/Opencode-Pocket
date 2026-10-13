@@ -218,6 +218,24 @@ opencode v2.0.x 绑 `0.0.0.0` 时**强制 Basic 鉴权**（不设密码则每次
   所以观众做的网站可直接用 `https://preview.<域名>/` 浏览——**相对与绝对路径都可用**
   （`/api/x` → `/preview/api/x` → 访客后端）。该段由 `ci-run.sh` 的 `ensure_preview_route` 幂等补上（防博客仓库覆盖）。
 
+## 多源汇总 + 外部上报（ingest）
+
+**弹幕源可多源同时采集**，都进**同一个投票池**（相同/相近意见照常 AI 合并；每人一票按平台命名空间
+去重，如 `bili:<uid>` / `douyin:<uid>`）。
+
+- `.env`：`CHAT_SOURCE=bilibili,ingest`（用逗号并列；`ingest` 表示接收外部上报）。
+- **上报接口**：`POST /__lb/ingest`，头 `x-ingest-token: <PLAYGROUND_INGEST_TOKEN>`；
+  - 单条：`{ "platform":"douyin", "user":"<uid>", "text":"给我做个番茄钟" }`
+  - 批量：`{ "messages":[ {...}, {...} ] }`
+  - 返回 `{ ok, accepted, options }`。
+- **抖音本机桥接**（官方玩法还没做前，先用这个，前期弹幕少够用）：
+  - `tools/douyin-ingest.user.js` —— Tampermonkey 用户脚本：打开 `live.douyin.com` 直播间，
+    自动把**新增弹幕**上报到 `/__lb/ingest`（顶部填令牌；抖音改版时按需调选择器）。
+  - `tools/ingest-bridge.mjs` —— 通用零依赖 Node 桥接：把任意「一行一条」的弹幕流喂给 ingest，
+    或在你自己的抓取器里 `import { post } from "./ingest-bridge.mjs"` 调用。
+- 说明：抖音**官方**取弹幕是「直播小玩法」形态（主播在直播伴侣挂载玩法、传 token，后端长连接收弹幕），
+  与这里的「读网页弹幕」不同；本条是过渡方案。
+
 ## 访客后端自愈（部署后自动恢复）
 
 访客/助手在 `/workspace` 里起的后端（约定端口 `8000`）跑在容器内，**容器重建（部署）会杀掉所有进程**，
