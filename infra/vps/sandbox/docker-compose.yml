@@ -36,6 +36,8 @@ services:
       PLAYGROUND_SERVER_PASSWORD: ${PLAYGROUND_SERVER_PASSWORD:-}
       # 允许 OpenCode Web UI(pocket 域)跨域把沙盒加为「服务器」
       SANDBOX_POCKET_ORIGIN: ${SANDBOX_POCKET_ORIGIN:-https://pocket.zxlumen.cn}
+      # 与 TUI 一致的搜索:沙盒 opencode 用 opencode-go 凭据(仅用于 websearch/OpenCode Web Search)
+      SANDBOX_OPENCODE_GO_KEY: ${SANDBOX_OPENCODE_GO_KEY:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - sandbox-caddy-data:/data

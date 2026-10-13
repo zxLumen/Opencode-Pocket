@@ -17,6 +17,12 @@ cp /srv/config-ro/AGENTS.md "$HOME/.config/opencode/AGENTS.md"
 # 不覆盖访客内容。/workspace 挂的是可写卷。
 [ -f /workspace/README.md ] || cp /srv/config-ro/README.md /workspace/README.md 2>/dev/null || true
 [ -f /workspace/AGENTS.md ] || cp /srv/config-ro/AGENTS.md /workspace/AGENTS.md 2>/dev/null || true
+# 与 TUI 一致的搜索:把 opencode-go 凭据写进 opencode auth,使 websearch 走 "OpenCode Web Search"
+if [ -n "${SANDBOX_OPENCODE_GO_KEY:-}" ]; then
+  mkdir -p "$HOME/.local/share/opencode"
+  printf '{"opencode-go":{"type":"api","key":"%s"}}' "$SANDBOX_OPENCODE_GO_KEY" > "$HOME/.local/share/opencode/auth.json"
+  chmod 600 "$HOME/.local/share/opencode/auth.json" 2>/dev/null || true
+fi
 # 辅助服务(内网 47311,由边缘 Caddy 转发):工作台页 + /config 净化 + /workspace 预览
 # + 访客后端反代。用**监督循环常驻**——即便被误杀(如 agent 腾端口)也自动拉起,
 # 避免整站 404。先起它再起 opencode:它取上游配置时自带重试,不怕 opencode 未就绪。
