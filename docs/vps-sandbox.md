@@ -229,8 +229,11 @@ opencode v2.0.x 绑 `0.0.0.0` 时**强制 Basic 鉴权**（不设密码则每次
   - 批量：`{ "messages":[ {...}, {...} ] }`
   - 返回 `{ ok, accepted, options }`。
 - **抖音本机桥接**（官方玩法还没做前，先用这个，前期弹幕少够用）：
-  - `tools/douyin-ingest.user.js` —— Tampermonkey 用户脚本：打开 `live.douyin.com` 直播间，
-    自动把**新增弹幕**上报到 `/__lb/ingest`（顶部填令牌；抖音改版时按需调选择器）。
+  - `tools/douyin-ingest.user.js`（**v2**）—— Tampermonkey 用户脚本：打开 `live.douyin.com` 直播间，
+    自动把**新增弹幕**上报到 `/__lb/ingest`（顶部填令牌；选择器改版时按需调）。自带：
+    **过滤系统/公告消息**（空/超长/纯符号/含「严禁…」，避免把抖音系统提示当票），以及
+    **防闲置暂停**（页面上下文把 `visibilityState` 覆盖为 visible、拦 `visibilitychange`、每 30s 伪活动 +
+    恢复 `video.play()` + 自动点掉「还在看吗」提示框）。
   - `tools/ingest-bridge.mjs` —— 通用零依赖 Node 桥接：把任意「一行一条」的弹幕流喂给 ingest，
     或在你自己的抓取器里 `import { post } from "./ingest-bridge.mjs"` 调用。
 - 说明：抖音**官方**取弹幕是「直播小玩法」形态（主播在直播伴侣挂载玩法、传 token，后端长连接收弹幕），
@@ -365,10 +368,11 @@ Xvfb(虚拟屏 1280x720)
 - **合并**：先做文本规范化精确去重（完全相同直接并票）；再**本地近似合并**（一方包含另一方、或字符
   bigram Jaccard≥0.72，即时）；再每 ~8s（`PLAYGROUND_MERGE_INTERVAL_MS` 去抖）调博客 AI 网关做语义合并。
   **合并后票数 = 去重后的投票人数**（同一人换多种说法最终只算 1 票）。
-- **网站操作（弹幕操控预览）**：观众发「往下/往上/顶部/底部」「点开<文字>」「返回」「刷新」等（含近似措辞），
-  **并入意见票池**（标记 `kind:site`，榜单显示 `▶` 前缀）；自本轮首条操作弹幕起 `PLAYGROUND_SITE_VOTE_SEC`
-  （默认 5s）用**票首**在**预览 iframe** 执行（滚动/点击/后退/刷新），**只作用于网站预览**，不碰会话/系统。
-  开关 `PLAYGROUND_SITE_CMD=1`。
+- **网站操作（弹幕操控预览）**：观众弹幕**先经博客 AI 网关判「语意」**——整句是在要求操作预览
+  （`想刷刷`→刷新、`往上翻翻`→上滚、`点开排行榜`→点击…）才归为页面操作；**长句里带「刷新」等词不再误触发**
+  （网关不可用时退回「严格整句」匹配）。操作**并入意见票池**（标记 `kind:site`，榜单显示 `▶` 前缀）；
+  自本轮首条操作弹幕起 `PLAYGROUND_SITE_VOTE_SEC`（默认 5s）用**票首**在**预览 iframe** 执行
+  （滚动/点击/后退/刷新），**只作用于网站预览**，不碰会话/系统。开关 `PLAYGROUND_SITE_CMD=1`。
 - **观众名（真实用户名）**：采集 B站弹幕 `info[2][1]` / YouTube `displayName`；票王注入时附「支持：昵称…」。
   名录同时写 `/workspace/audience.json`，并在预览下暴露 **`/preview/__audience.json`**（`{list:[{name,votes,at}]}`），
   供访客网站前端 `fetch('__audience.json')` 显示真实观众昵称（`seed/AGENTS.md` 已注明）。

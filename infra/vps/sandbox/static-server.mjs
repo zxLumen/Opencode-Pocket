@@ -737,7 +737,7 @@ function handleChat(text, channelId, name) {
     if (opt) vote(opt, channelId, name);
     return;
   }
-  if (SITE_CMD_ENABLED) { const sc = parseSiteCmd(t); if (sc) { siteVote(sc, channelId); return; } }
+  if (SITE_CMD_ENABLED) { siteQueue.push({ text: t, channelId, name }); return; } // 交语意判断,见 siteIntentLoop
   enqueueOpinion(t, channelId, name);
 }
 const lastByUser = new Map();
@@ -1240,6 +1240,87 @@ async function siteTick() {
   changed();
 }
 async function siteLoop() { for (;;) { await sleep(1000); try { await siteTick(); } catch {} } }
+
+// ---------- 语意判断:这句弹幕是不是「操作网页预览」(交网关;不再用关键词包含匹配) ----------
+const SITE_INTENT_CACHE = new Map();
+let siteQueue = [];
+function strictSiteCmd(text) {
+  const t = String(text || "").trim().replace(/[\s!！。.~、,，]+$/g, "");
+  if (!t || t.length > 12) return null;
+  if (/^(刷新|重载|重新加载|reload)$/i.test(t)) return { type: "reload" };
+  if (/^(返回|后退|上一页|back)$/i.test(t)) return { type: "back" };
+  if (/^(回到?顶部|到顶部|滚到顶|置顶|最上面|回顶)$/.test(t)) return { type: "scroll", dir: "top" };
+  if (/^(到底部|到最下|滚到底|最下面|最底)$/.test(t)) return { type: "scroll", dir: "bottom" };
+  if (/^(往下|下翻|下滑|下滚|向下|往下滑|往下滚|下移)$/.test(t)) return { type: "scroll", dir: "down" };
+  if (/^(往上|上翻|上滑|上滚|向上|上移)$/.test(t)) return { type: "scroll", dir: "up" };
+  const m = t.match(/^(?:点开|打开|点击|点一下)\s*[「"']?([^」"'，。,.！!？?\s]{1,20})[」"']?$/);
+  if (m) return { type: "click", text: m[1].trim() };
+  return null;
+}
+function siteOpToCmd(op, clickText) {
+  if (op === "reload") return { type: "reload" };
+  if (op === "back") return { type: "back" };
+  if (op === "top") return { type: "scroll", dir: "top" };
+  if (op === "bottom") return { type: "scroll", dir: "bottom" };
+  if (op === "up") return { type: "scroll", dir: "up" };
+  if (op === "down") return { type: "scroll", dir: "down" };
+  if (op === "click" && clickText) return { type: "click", text: String(clickText).slice(0, 20) };
+  return null;
+}
+async function classifySiteBatch(texts) {
+  const sys = "判断每条弹幕是不是在【要求操作网页预览】(整句就是一道页面操作指令,而不是让 AI 做开发任务)。" +
+    "可选操作:reload(刷新)/back(返回)/top(滚到顶部)/bottom(到底部)/up(向上滚)/down(向下滚)/click(点开某文字)。" +
+    "看【意图】不逐字:如『想刷刷』『刷一下』『重新载入』=reload;『往上翻翻』=up。若是开发任务或闲聊则 none。" +
+    "只输出 JSON 数组,每项 {\"i\":序号,\"op\":\"reload|back|top|bottom|up|down|click|none\",\"text\":\"click 目标文字\"}。不要解释。";
+  const r = await fetch(GATEWAY_URL + "/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
+    body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0, messages: [
+      { role: "system", content: sys },
+      { role: "user", content: JSON.stringify(texts.map((t, i) => ({ i, text: t }))) },
+    ] }),
+  });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const d = await r.json();
+  const content = String((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "");
+  const s = content.indexOf("["), e = content.lastIndexOf("]");
+  if (s < 0 || e < s) throw new Error("bad output");
+  const arr = JSON.parse(content.slice(s, e + 1));
+  const map = new Map();
+  if (Array.isArray(arr)) for (const o of arr) if (o && typeof o.i === "number") map.set(o.i, o);
+  return map;
+}
+function applySiteIntent(cmd, it) {
+  if (cmd) siteVote(cmd, it.channelId);
+  else enqueueOpinion(it.text, it.channelId, it.name);
+}
+async function siteIntentLoop() {
+  for (;;) {
+    await sleep(1200);
+    if (!SITE_CMD_ENABLED) { if (siteQueue.length) siteQueue = []; continue; }
+    if (!siteQueue.length) continue;
+    const batch = siteQueue.splice(0, 20);
+    const pending = [];
+    for (const it of batch) {
+      const key = normText(it.text) || it.text;
+      if (SITE_INTENT_CACHE.has(key)) { applySiteIntent(SITE_INTENT_CACHE.get(key), it); continue; }
+      pending.push({ it, key });
+    }
+    if (!pending.length) continue;
+    let res = null;
+    if (GATEWAY_TOKEN) { try { res = await classifySiteBatch(pending.map((x) => x.it.text)); } catch (e) { console.error("[live] 页面意图分类失败,改用严格兜底:", (e && e.message) || e); } }
+    for (let idx = 0; idx < pending.length; idx++) {
+      const { it, key } = pending[idx];
+      let cmd = null;
+      const o = res && res.get(idx);
+      if (o && o.op && o.op !== "none") cmd = siteOpToCmd(String(o.op), o.text);
+      else if (!res) cmd = strictSiteCmd(it.text); // 网关不可用时兜底
+      if (SITE_INTENT_CACHE.size > 5000) SITE_INTENT_CACHE.clear();
+      SITE_INTENT_CACHE.set(key, cmd);
+      applySiteIntent(cmd, it);
+    }
+  }
+}
 
 // ---------- 观众名录(真实 B站/YouTube 用户名) ----------
 function audiencePublic() {
@@ -1814,7 +1895,7 @@ function startLive() {
   if (CHAT_SOURCES.includes("youtube")) ytLoop();
   if (CHAT_SOURCES.includes("ingest")) console.log("[live] 弹幕上报(ingest)已启用:POST /__lb/ingest");
   if (!CHAT_SOURCES.includes("bilibili") && !CHAT_SOURCES.includes("youtube") && !CHAT_SOURCES.includes("ingest")) console.log("[live] 未配置弹幕源(YT_API_KEY/YT_VIDEO_ID 或 BILI_ROOM_ID;也可用 ingest 上报)");
-  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); guideLoop(); audienceLoop(); autoCreateLoop(); sessionEventLoop(); sessionPollLoop();
+  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); siteIntentLoop(); guideLoop(); audienceLoop(); autoCreateLoop(); sessionEventLoop(); sessionPollLoop();
   console.log("[live] 直播投票已启动: 轮次=", live.round, "自动接棒=", live.autoDirect, "最小票数=", MIN_VOTES, "自动合并=", MERGE_ENABLED);
   setTimeout(maybeInject, 5000); // 重启后若已有票且会话空闲,补接一轮
 }
