@@ -726,7 +726,7 @@ function addOpinion(text, channelId, name) {
   text = String(text || "").trim();
   if (!text) return null;
   if (text.length > MAX_OPINION_LEN) text = text.slice(0, MAX_OPINION_LEN);
-  const norm = normText(text);
+  const norm = normText(text) || text.toLowerCase(); // 纯符号/表情也进池(不丢观众弹幕)
   if (!norm) return null;
   channelId = channelId || "anon:" + Math.random().toString(36).slice(2, 8);
   let opt = live.options.find((o) => o.norm === norm);
@@ -760,8 +760,9 @@ function handleChat(text, channelId, name) {
   const n = parsePick(t);
   if (n) {
     const opt = activeOptions()[n - 1];
-    if (opt) vote(opt, channelId, name);
-    return;
+    if (opt) { vote(opt, channelId, name); return; }
+    // 池里没有这个序号 → 别把弹幕吞掉:当作普通意见进池(新人常发「1」试探)
+    console.log("[live] 序号", n, "无对应选项 → 当作普通意见");
   }
   if (SITE_CMD_ENABLED) { siteQueue.push({ text: t, channelId, name }); return; } // 交语意判断,见 siteIntentLoop
   enqueueOpinion(t, channelId, name);
@@ -800,8 +801,8 @@ function enqueueOpinion(text, channelId, name) {
   text = String(text || "").trim();
   if (!text) return;
   if (text.length > MAX_OPINION_LEN) text = text.slice(0, MAX_OPINION_LEN);
-  const norm = normText(text);
-  if (!norm) return; // 纯符号/表情,无法作为意见
+  const norm = normText(text) || text.toLowerCase(); // 纯符号/表情也进池(不丢观众弹幕)
+  if (!norm) return;
   if (!MODERATE || MODERATE_MODE === "off") return addOpinion(text, channelId, name); // 弹幕侧不过滤
   if (!ruleFilter(text, norm)) return; // 规则拦截 → 不进投票
   if (MODERATE_MODE === "rules") return addOpinion(text, channelId, name);
@@ -2139,10 +2140,10 @@ async function handleIngest(req, res) {
   let n = 0;
   for (const m of list) {
     const text = String((m && m.text) || "").trim();
-    if (!text) continue;
+    if (!text) { console.log("[ingest] 丢弃:空文本"); continue; }
     const platform = String((m && m.platform) || "ingest").toLowerCase();
     const user = String((m && (m.user || m.uid)) || "");
-    if (!allowUser(platform + ":" + user, Date.now())) continue;
+    if (!allowUser(platform + ":" + user, Date.now())) { console.log("[ingest] 丢弃:同人 3s 内重复", platform + ":" + user, text.slice(0, 30)); continue; }
     handleChat(text, platform + ":" + user, String((m && m.name) || ""));
     n++;
   }
