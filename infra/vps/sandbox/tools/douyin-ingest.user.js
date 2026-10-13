@@ -17,7 +17,7 @@
   const PLATFORM = "douyin";
   const ITEM_SELECTOR = '[class*="webcast-chatroom___item"]';
   const TEXT_SELECTOR = '[class*="___content"]';
-  const NAME_SELECTOR = '[class*="nickname"], [class*="___name"]';
+  const NAME_SELECTOR = '[class*="nickname"], [class*="___name"], [class*="user-name"], [class*="userName"], [class*="nick-name"]';
   const MAX_LEN = 120;   // 超长忽略
   const DEBUG = true;
   // =====================================================
@@ -69,11 +69,11 @@
     return false;
   }
 
-  function payloadOf(text, user) {
-    return JSON.stringify({ platform: PLATFORM, user: String(user || ""), text: String(text || "").trim() });
+  function payloadOf(text, user, name) {
+    return JSON.stringify({ platform: PLATFORM, user: String(user || ""), name: String(name || user || ""), text: String(text || "").trim() });
   }
-  async function send(text, user) {
-    const body = payloadOf(text, user);
+  async function send(text, user, name) {
+    const body = payloadOf(text, user, name);
     try {
       const r = await fetch(INGEST_URL, { method: "POST", mode: "cors", headers: { "content-type": "application/json", "x-ingest-token": TOKEN }, body });
       if (r.ok) { sent++; if (DEBUG) log("✅", text); return; }
@@ -95,9 +95,16 @@
     seen.add(el);
     const t = el.querySelector(TEXT_SELECTOR) || el;
     const n = el.querySelector(NAME_SELECTOR);
-    const text = (t.textContent || "").trim();
+    let name = n ? (n.textContent || "").trim() : "";
+    let text = (t.textContent || "").trim();
+    // 昵称没选中 → 用「昵称：内容」的前缀兜底
+    if (!name && /[：:]/.test(text)) {
+      const p = text.split(/[：:]/);
+      const head = (p.shift() || "").trim();
+      if (head && head.length <= 16) { name = head; text = p.join("：").trim(); }
+    }
     if (isJunk(text)) return;
-    send(text, n ? n.textContent : "");
+    send(text, name, name);
   }
   function handleAdded(node) {
     if (!node || node.nodeType !== 1) return;

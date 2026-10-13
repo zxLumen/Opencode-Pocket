@@ -615,7 +615,7 @@ function saveLive() {
 const sseClients = new Set();
 function publicState() {
   const options = [...live.options].sort((a, b) => b.votes - a.votes || a.createdAt - b.createdAt)
-    .map((o, i) => ({ rank: i + 1, id: o.id, text: o.text, votes: o.votes }));
+    .map((o, i) => ({ rank: i + 1, id: o.id, text: o.text, votes: o.votes, src: o.src || "" }));
   const leader = options.length ? { text: options[0].text, votes: options[0].votes } : null;
   return {
     round: live.round,
@@ -691,12 +691,16 @@ function vote(opt, channelId, name) {
   if (channelId && opt.voters.includes(channelId)) return false;
   if (channelId) opt.voters.push(channelId);
   opt.votes += 1;
+  if (!opt.src && channelId) opt.src = srcOf(channelId);
   if (channelId && name) { opt.names = opt.names || {}; opt.names[channelId] = String(name).slice(0, 24); }
   recordAudience(channelId, name);
   changed();
   maybeInject(); // 会话空闲时,投票即可触发自动接棒
   return true;
 }
+const SRC_NAME = { bili: "B站", youtube: "YouTube", douyin: "抖音", ingest: "上报", admin: "管理", anon: "匿名", auto: "自动", selftest: "自测", diag: "自测", t: "自测" };
+function srcOf(channelId) { const s = String(channelId || "").split(":")[0]; return s || "?"; }
+function srcLabel(channelId) { const s = srcOf(channelId); return SRC_NAME[s] || s; }
 function addOpinion(text, channelId, name) {
   text = String(text || "").trim();
   if (!text) return null;
@@ -706,7 +710,7 @@ function addOpinion(text, channelId, name) {
   channelId = channelId || "anon:" + Math.random().toString(36).slice(2, 8);
   let opt = live.options.find((o) => o.norm === norm);
   if (!opt) {
-    opt = { id: newOptId(), text, norm, votes: 0, voters: [], createdAt: Date.now() };
+    opt = { id: newOptId(), text, norm, votes: 0, voters: [], src: srcOf(channelId), createdAt: Date.now() };
     live.options.push(opt);
     markMergeDirty();
   }
@@ -731,6 +735,7 @@ function handleChat(text, channelId, name) {
   const t = String(text || "").trim();
   if (!t) return;
   if (live.questionVote) { qvVote(t, channelId || "anon:" + Math.random().toString(36).slice(2, 8)); return; }
+  console.log("[live] 弹幕[" + srcLabel(channelId) + "] " + (name ? name + " " : "") + t.slice(0, 60));
   const n = parsePick(t);
   if (n) {
     const opt = activeOptions()[n - 1];
@@ -1216,7 +1221,7 @@ function siteVote(cmd, channelId) {
   channelId = channelId || "anon:" + Math.random().toString(36).slice(2, 8);
   let opt = live.options.find((o) => o.kind === "site" && o.norm === key);
   if (!opt) {
-    opt = { id: newOptId(), text: siteLabel(cmd), norm: key, kind: "site", cmd: JSON.stringify(cmd), votes: 0, voters: [], createdAt: Date.now() };
+    opt = { id: newOptId(), text: siteLabel(cmd), norm: key, kind: "site", cmd: JSON.stringify(cmd), votes: 0, voters: [], src: srcOf(channelId), createdAt: Date.now() };
     live.options.push(opt);
   }
   if (!live.siteFirstAt) live.siteFirstAt = Date.now();
@@ -1232,7 +1237,7 @@ async function siteTick() {
   let cmd = {};
   try { cmd = JSON.parse(top.cmd || "{}"); } catch {}
   live.site = { seq: (live.siteSeq = (live.siteSeq || 0) + 1), ...cmd };
-  live.executed.push({ round: live.round, text: top.text, votes: top.votes, at: Date.now(), status: "done" });
+  live.executed.push({ round: live.round, text: top.text, votes: top.votes, src: top.src || "?", at: Date.now(), status: "done" });
   if (live.executed.length > 200) live.executed = live.executed.slice(-200);
   live.options = live.options.filter((o) => o !== top); // 执行后从票池移除该条
   live.siteFirstAt = null;
@@ -1588,7 +1593,7 @@ async function injectTop(top, src) {
       if (!r.ok) throw new Error("HTTP " + r.status);
     } catch (e) { console.error("[live] 注入失败:", (e && e.message) || e); return false; }
   } finally { live.injecting = false; }
-  const entry = { round: live.round, text: (src === "auto" ? "【自动】" : "") + top.text, votes: top.votes, at: Date.now(), status: "running" };
+  const entry = { round: live.round, text: (src === "auto" ? "【自动】" : "") + top.text, votes: top.votes, src: src === "auto" ? "auto" : (top.src || "?"), at: Date.now(), status: "running" };
   live.executed.push(entry);
   if (live.executed.length > 200) live.executed = live.executed.slice(-200);
   live.currentRun = entry;
@@ -1939,7 +1944,7 @@ async function handleIngest(req, res) {
     const platform = String((m && m.platform) || "ingest").toLowerCase();
     const user = String((m && (m.user || m.uid)) || "");
     if (!allowUser(platform + ":" + user, Date.now())) continue;
-    handleChat(text, platform + ":" + user);
+    handleChat(text, platform + ":" + user, String((m && m.name) || ""));
     n++;
   }
   return json(res, { ok: true, accepted: n, options: publicState().options });

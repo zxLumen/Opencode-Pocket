@@ -43,6 +43,7 @@
   .opt .bar > i { display: block; height: 100%; background: linear-gradient(90deg, #2563eb, #60a5fa); border-radius: 4px; transition: width .35s ease; }
   .opt .votes { justify-self: end; min-width: 44px; text-align: right; font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .opt .votes small { font-size: 12px; color: var(--dim); font-weight: 600; }
+  .src { display: inline-block; font-size: 11px; line-height: 1; padding: 2px 6px; margin-right: 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); vertical-align: middle; }
   /* 已执行:直接从票池移除,不置灰 */
   .empty { color: var(--dim); padding: 18px 6px; font-size: 15px; }
   .guide { display: flex; flex-direction: column; gap: 8px; padding: 6px 4px; }
@@ -154,6 +155,8 @@
   var last = null;
 
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); }
+  var SRC = { bili: "B站", youtube: "YouTube", douyin: "抖音", ingest: "上报", admin: "管理", anon: "匿名", auto: "自动" };
+  function srcTag(s) { var t = SRC[s] || s || ""; if (!t || t === "?") return ""; return '<span class="src">' + esc(t) + '</span>'; }
   function mins(from) { return from ? Math.max(0, Math.floor((Date.now() - from) / 60000)) : 0; }
 
   function render(st) {
@@ -191,7 +194,7 @@
       var pct = Math.round((o.votes / max) * 100);
       return '<div class="opt' + (idx === 0 ? " lead" : "") + '">' +
         '<div class="rank">' + o.rank + '</div>' +
-        '<div class="body"><div class="text">' + esc(o.text) + '</div>' +
+        '<div class="body"><div class="text">' + srcTag(o.src) + esc(o.text) + '</div>' +
         '<div class="bar"><i style="width:' + pct + '%"></i></div></div>' +
         '<div class="votes">' + o.votes + '<small> 票</small></div></div>';
     }).join("");
@@ -203,6 +206,7 @@
       var label = { running: "执行中", done: "已完成", failed: "失败", timeout: "已中断" }[r.status] || r.status;
       if (r.status === "running") { var m = mins(r.at); if (m >= 1) label += " " + m + "m"; }
       return '<div class="run"><span class="rn">#' + r.round + '</span>' +
+        srcTag(r.src) +
         '<span class="rt" title="' + esc(r.text) + '">' + esc(r.text) + '</span>' +
         '<span class="rs ' + r.status + '">' + label + '</span></div>';
     }).join("");
