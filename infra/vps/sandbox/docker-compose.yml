@@ -75,6 +75,10 @@ services:
       CHAT_SOURCE: ${CHAT_SOURCE:-}
       # B 站直播间号(短号或真实 room_id);匿名读公开弹幕,无需 OAuth
       BILI_ROOM_ID: ${BILI_ROOM_ID:-}
+      # 可选:以「已登录观众」身份读弹幕(低人气房间匿名常收不到)。SESSDATA 敏感,建议小号、只读。
+      BILI_SESSDATA: ${BILI_SESSDATA:-}
+      BILI_UID: ${BILI_UID:-}
+      BILI_BUVID3: ${BILI_BUVID3:-}
     init: true
     user: "10001:10001"
     read_only: true

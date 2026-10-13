@@ -472,6 +472,10 @@ const YT_VIDEO_ID = (process.env.YT_VIDEO_ID || "").trim();
 const YT_POLL_MS = Number(process.env.YT_POLL_MS || 0);
 // 弹幕源:youtube | bilibili | off(默认按已配置的凭据自动选)
 const BILI_ROOM_ID = String(process.env.BILI_ROOM_ID || "").trim();
+// 可选:以「已登录观众」身份读弹幕(低人气房间匿名常收不到)。SESSDATA 敏感,建议小号、只读。
+const BILI_SESSDATA = String(process.env.BILI_SESSDATA || "").trim();
+const BILI_UID = String(process.env.BILI_UID || "").trim();
+const BILI_BUVID3 = String(process.env.BILI_BUVID3 || "").trim();
 const CHAT_SOURCE = String(
   process.env.CHAT_SOURCE || (YT_API_KEY && YT_VIDEO_ID ? "youtube" : BILI_ROOM_ID ? "bilibili" : "off"),
 ).toLowerCase();
@@ -489,7 +493,7 @@ let live = {
   lastInjectAt: 0,
   currentRun: null,
   session: "unknown",
-  chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, chatId: null, videoId: YT_VIDEO_ID || null, detail: CHAT_SOURCE === "bilibili" ? (BILI_ROOM_ID || null) : (YT_VIDEO_ID || null), lastAt: 0, error: null },
+  chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, loggedIn: Boolean(BILI_SESSDATA), chatId: null, videoId: YT_VIDEO_ID || null, detail: CHAT_SOURCE === "bilibili" ? (BILI_ROOM_ID || null) : (YT_VIDEO_ID || null), lastAt: 0, error: null },
 };
 
 async function loadLive() {
@@ -539,7 +543,7 @@ function publicState() {
     cooldownSec: Math.round(COOLDOWN_MS / 1000),
     maxRounds: MAX_ROUNDS,
     merge: MERGE_ENABLED,
-    chat: { source: live.chat.source, enabled: live.chat.enabled, connected: live.chat.connected, lastAt: live.chat.lastAt, error: live.chat.error, detail: live.chat.detail, videoId: live.chat.videoId },
+    chat: { source: live.chat.source, enabled: live.chat.enabled, connected: live.chat.connected, loggedIn: live.chat.loggedIn, lastAt: live.chat.lastAt, error: live.chat.error, detail: live.chat.detail, videoId: live.chat.videoId },
     options,
     leader,
     executed: live.executed.slice(-40).reverse(),
@@ -936,26 +940,36 @@ function biliEncWbi(params, imgKey, subKey) {
     .join("&");
   return query + "&w_rid=" + createHash("md5").update(query + mixin).digest("hex");
 }
-let biliFp = null; // { b3, b4, imgKey, subKey, at }
+function biliCookie(b3, b4) {
+  const parts = [];
+  if (b3) parts.push("buvid3=" + b3);
+  if (b4) parts.push("buvid4=" + b4);
+  if (BILI_SESSDATA) parts.push("SESSDATA=" + BILI_SESSDATA);
+  return parts.join("; ");
+}
+let biliFp = null; // { b3, b4, imgKey, subKey, mid, at }
 async function biliFingerprint(force) {
   if (biliFp && !force && Date.now() - biliFp.at < 3600e3) return biliFp;
   const spi = await (await fetch("https://api.bilibili.com/x/frontend/finger/spi", { headers: { "user-agent": BILI_UA } })).json();
-  const b3 = (spi && spi.data && spi.data.b_3) || "";
+  const b3 = BILI_BUVID3 || (spi && spi.data && spi.data.b_3) || "";
   const b4 = (spi && spi.data && spi.data.b_4) || "";
+  const cookie = biliCookie(b3, b4);
   const nav = await (await fetch("https://api.bilibili.com/x/web-interface/nav", {
-    headers: { "user-agent": BILI_UA, referer: "https://www.bilibili.com/", ...(b3 ? { cookie: "buvid3=" + b3 } : {}) },
+    headers: { "user-agent": BILI_UA, referer: "https://www.bilibili.com/", ...(cookie ? { cookie } : {}) },
   })).json();
   const imgKey = ((((nav && nav.data && nav.data.wbi_img && nav.data.wbi_img.img_url) || "").split("/").pop()) || "").split(".")[0];
   const subKey = ((((nav && nav.data && nav.data.wbi_img && nav.data.wbi_img.sub_url) || "").split("/").pop()) || "").split(".")[0];
   if (!imgKey || !subKey) throw new Error("拿不到 WBI 密钥(nav code " + (nav && nav.code) + ")");
-  biliFp = { b3, b4, imgKey, subKey, at: Date.now() };
+  const mid = Number((nav && nav.data && nav.data.mid) || 0) || 0;
+  live.chat.loggedIn = Boolean(nav && nav.data && nav.data.isLogin) || Boolean(BILI_SESSDATA);
+  biliFp = { b3, b4, imgKey, subKey, mid, at: Date.now() };
   return biliFp;
 }
 async function biliGetDanmuInfo(realRoom) {
   const fp = await biliFingerprint(false);
   const qs = biliEncWbi({ id: String(realRoom), type: 0 }, fp.imgKey, fp.subKey);
   const r = await fetch(BILI_API + "/xlive/web-room/v1/index/getDanmuInfo?" + qs, {
-    headers: { "user-agent": BILI_UA, referer: "https://live.bilibili.com/", ...(fp.b3 ? { cookie: "buvid3=" + fp.b3 + "; buvid4=" + fp.b4 } : {}) },
+    headers: { "user-agent": BILI_UA, referer: "https://live.bilibili.com/", ...(biliCookie(fp.b3, fp.b4) ? { cookie: biliCookie(fp.b3, fp.b4) } : {}) },
   });
   const d = await r.json();
   const info = d && d.data;
@@ -968,14 +982,16 @@ async function biliGetDanmuInfo(realRoom) {
 function biliSession(host, token, roomid) {
   return new Promise((resolve) => {
     const url = host ? "wss://" + host.host + ":" + host.wss_port + "/sub" : BILI_WS_FALLBACK;
-    const headers = { Origin: "https://live.bilibili.com", "User-Agent": BILI_UA, ...(biliFp && biliFp.b3 ? { Cookie: "buvid3=" + biliFp.b3 } : {}) };
+    const cookie = biliFp ? biliCookie(biliFp.b3, biliFp.b4) : "";
+    const headers = { Origin: "https://live.bilibili.com", "User-Agent": BILI_UA, ...(cookie ? { Cookie: cookie } : {}) };
     let ws;
     try { ws = new WebSocket(url, { headers }); } catch { try { ws = new WebSocket(url); } catch { return resolve(); } }
     try { ws.binaryType = "arraybuffer"; } catch {}
     let hb = null, settled = false;
     const done = () => { if (settled) return; settled = true; if (hb) clearInterval(hb); try { ws.close(); } catch {} resolve(); };
     ws.addEventListener("open", () => {
-      const auth = JSON.stringify({ uid: 0, roomid: Number(roomid), protover: 3, platform: "web", type: 2, key: token || "" });
+      const uid = Number(BILI_UID) || (biliFp && biliFp.mid) || 0;
+      const auth = JSON.stringify({ uid, roomid: Number(roomid), protover: 3, platform: "web", type: 2, key: token || "" });
       try { ws.send(biliPacket(7, auth)); } catch { return done(); }
       hb = setInterval(() => { try { ws.send(biliPacket(2, null)); } catch {} }, 30000);
     });

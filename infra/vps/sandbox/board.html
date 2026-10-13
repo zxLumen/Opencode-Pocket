@@ -143,7 +143,7 @@
     }
     pill("p-session", st.session === "running", st.session === "running" ? "会话 运行中" : (st.session === "idle" ? "会话 空闲" : "会话 …"));
     var srcName = { youtube: "YouTube", bilibili: "B站", off: "无源" }[st.chat.source] || st.chat.source;
-    var chatLabel = !st.chat.enabled ? "弹幕 未配置" : ("弹幕 " + srcName + (st.chat.connected ? " 已连接" : " 连接中"));
+    var chatLabel = !st.chat.enabled ? "弹幕 未配置" : ("弹幕 " + srcName + (st.chat.connected ? " 已连接" : " 连接中") + (st.chat.loggedIn ? " ·登录" : ""));
     pill("p-yt", st.chat.connected, chatLabel, st.chat.enabled && !!st.chat.error);
     pill("p-auto", st.autoDirect, st.autoDirect ? "自动接棒 开" : "自动接棒 关");
 
