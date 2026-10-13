@@ -564,6 +564,7 @@ let live = {
   site: null, // 最近一次下发的网站操作 {seq,type,...}
   siteSeq: 0,
   siteFirstAt: null,
+  guide: null, // { examples:[...], at }
   chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, loggedIn: Boolean(BILI_SESSDATA), chatId: null, videoId: YT_VIDEO_ID || null, detail: CHAT_SOURCE === "bilibili" ? (BILI_ROOM_ID || null) : (YT_VIDEO_ID || null), lastAt: 0, error: null },
 };
 
@@ -614,6 +615,7 @@ function publicState() {
     blocked: live.blocked,
     question: qvPublic(),
     site: live.site || null,
+    guide: (!live.options.length && !live.questionVote && live.guide) ? { examples: live.guide.examples } : null,
     minVotes: MIN_VOTES,
     cooldownSec: Math.round(COOLDOWN_MS / 1000),
     maxRounds: MAX_ROUNDS,
@@ -998,6 +1000,8 @@ const QUESTION_POLICY = String(process.env.PLAYGROUND_QUESTION_POLICY || "vote")
 const QUESTION_VOTE_MS = Number(process.env.PLAYGROUND_QUESTION_VOTE_SEC || 20) * 1000; // 问题投票时长(自该题首条弹幕起)
 const SITE_CMD_ENABLED = process.env.PLAYGROUND_SITE_CMD !== "0"; // 弹幕操控网站预览
 const SITE_VOTE_MS = Number(process.env.PLAYGROUND_SITE_VOTE_SEC || 5) * 1000; // 网站操作投票时长
+const GUIDE_ENABLED = process.env.PLAYGROUND_GUIDE !== "0"; // 空票时智能引导
+const GUIDE_INTERVAL_MS = Number(process.env.PLAYGROUND_GUIDE_INTERVAL_MS || 30000);
 const PERMISSION_POLICY = String(process.env.PLAYGROUND_PERMISSION_POLICY || "reject").toLowerCase(); // reject|once|always
 async function upJSON(path) {
   const r = await upstreamFetch(path);
@@ -1195,6 +1199,38 @@ async function siteTick() {
   changed();
 }
 async function siteLoop() { for (;;) { await sleep(1000); try { await siteTick(); } catch {} } }
+
+// ---------- 空票时的智能引导(网关生成 2-3 条可发弹幕的示例) ----------
+async function genGuide() {
+  if (!GATEWAY_TOKEN) return;
+  const last = live.executed.slice(-5).map((e) => e.text).join(" / ");
+  const sys = "你是直播间互动助手。请给出 2-3 条具体、简短(每条≤14字)、观众能直接发弹幕提出的新点子(针对当前网站/演示)。只输出 JSON 字符串数组,不要任何解释。";
+  try {
+    const r = await fetch(GATEWAY_URL + "/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
+      body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0.7, messages: [{ role: "system", content: sys }, { role: "user", content: "当前 AI 在做/最近做过:" + (last || "(刚开始)") }] }),
+    });
+    if (!r.ok) return;
+    const d = await r.json();
+    const c = String((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "");
+    const s = c.indexOf("["), e = c.lastIndexOf("]");
+    if (s < 0 || e < s) return;
+    const arr = JSON.parse(c.slice(s, e + 1));
+    if (Array.isArray(arr) && arr.length) {
+      live.guide = { examples: arr.map((x) => String(x).slice(0, 20)).slice(0, 3), at: Date.now() };
+      console.log("[live] 生成引导示例:", JSON.stringify(live.guide.examples));
+      changed();
+    }
+  } catch (e) { console.error("[live] 引导生成失败:", (e && e.message) || e); }
+}
+async function guideLoop() {
+  if (!GUIDE_ENABLED) return;
+  for (;;) {
+    try { if (!live.options.length && !live.questionVote && (!live.guide || Date.now() - live.guide.at > GUIDE_INTERVAL_MS)) await genGuide(); } catch {}
+    await sleep(GUIDE_INTERVAL_MS);
+  }
+}
 
 let askBusy = false;
 async function askLoop() {
@@ -1603,7 +1639,7 @@ function startLive() {
   if (CHAT_SOURCE === "bilibili") biliLoop();
   else if (CHAT_SOURCE === "youtube") ytLoop();
   else console.log("[live] 未配置弹幕源(YT_API_KEY/YT_VIDEO_ID 或 BILI_ROOM_ID)");
-  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); sessionEventLoop(); sessionPollLoop();
+  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); guideLoop(); sessionEventLoop(); sessionPollLoop();
   console.log("[live] 直播投票已启动: 轮次=", live.round, "自动接棒=", live.autoDirect, "最小票数=", MIN_VOTES, "自动合并=", MERGE_ENABLED);
   setTimeout(maybeInject, 5000); // 重启后若已有票且会话空闲,补接一轮
 }
