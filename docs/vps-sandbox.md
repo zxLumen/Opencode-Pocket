@@ -412,8 +412,14 @@ Xvfb(虚拟屏 1280x720)
   会话级 form 的每题各开一轮，观众发 `#序号`/选项文字/整句选择语（「第一个」「选2」「1号」等）投票，
   **未匹配的作为自由文本候选**；
   自该题**首条弹幕起** `PLAYGROUND_QUESTION_VOTE_SEC`（默认 20s）后用**票首**作答，答完进入下一题，
-  全部答完一次性提交 `POST /api/session/<id>/form/<id>/reply`，随后**恢复意见投票**。无人投则一直等。
+  全部答完一次性提交 `POST /api/session/<id>/form/<id>/reply`，随后**恢复意见投票**。
+  **无人投票也不会卡死**：超过 `PLAYGROUND_QUESTION_FALLBACK_SEC`（默认 45s）自动取**第一项**作答；
+  提交失败也会推进（不阻塞后续）。
   另可 `auto`（网关代答）或 `pause`（只暂停人工答）。权限申请默认 `reject`。
+- **出错也能自愈**：`session.error` / `execution.failed` 立即标记本轮失败并置为 `idle`（继续接棒），
+  并清掉挂起的 question 收集；自动创作会把**失败过的**任务喂给模型，明确「换更简单、更可能一次做成的实现」。
+  另有兜底看门狗：注入长期卡住时释放 `injecting`；上游请求带 `PLAYGROUND_UPSTREAM_TIMEOUT_MS`（默认 25s）超时，
+  会话卡在 running 由 `/api/session/active` 轮询自愈。
 - **状态持久化**：`/home/opencode/.local/state/sandbox/live.json`（家目录卷，部署/重启不丢）。
 
 **端点**（辅助服务；Caddy 已放行 `^/__lb/` 与 `GET /board`）：

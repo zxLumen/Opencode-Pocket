@@ -1019,9 +1019,11 @@ async function mergeLoop() {
 }
 
 // ---------- 自动接棒:会话跑完 → 把票王发给模型 → 清零 ----------
+const UPSTREAM_TIMEOUT_MS = Number(process.env.PLAYGROUND_UPSTREAM_TIMEOUT_MS || 25000); // 上游请求超时(避免 fetch 挂死 → injecting 永不释放)
 async function upstreamFetch(path, opts = {}) {
   const headers = { accept: "application/json", ...(UPSTREAM_AUTH ? { authorization: UPSTREAM_AUTH } : {}), ...(opts.headers || {}) };
-  return fetch(UPSTREAM + path, { ...opts, headers });
+  const signal = opts.signal || AbortSignal.timeout(UPSTREAM_TIMEOUT_MS);
+  return fetch(UPSTREAM + path, { ...opts, headers, signal });
 }
 // 观众投票驱动的模式切换:命中则系统代切(plan/build),前端实时同步(见 SHELL_CLIENT)
 const SWITCH_HINT_RE = /(切换|切到|切为|换成|换到|模式|plan|build|计划|构建|switch|mode)/i;
@@ -1051,6 +1053,7 @@ async function detectSwitch(text) {
 // 观众投票是「下一轮想让模型做的事」,不是 question 的答案 → 阻塞期间不注入、不拿投票答题。
 const QUESTION_POLICY = String(process.env.PLAYGROUND_QUESTION_POLICY || "vote").toLowerCase(); // vote|auto|pause
 const QUESTION_VOTE_MS = Number(process.env.PLAYGROUND_QUESTION_VOTE_SEC || 20) * 1000; // 问题投票时长(自该题首条弹幕起)
+const QUESTION_FALLBACK_MS = Number(process.env.PLAYGROUND_QUESTION_FALLBACK_SEC || 45) * 1000; // 无人投票的兜底作答时限(超过就自动选,避免永久卡住)
 const SITE_CMD_ENABLED = process.env.PLAYGROUND_SITE_CMD !== "0"; // 弹幕操控网站预览
 const SITE_VOTE_MS = Number(process.env.PLAYGROUND_SITE_VOTE_SEC || 5) * 1000; // 网站操作投票时长
 const GUIDE_ENABLED = process.env.PLAYGROUND_GUIDE !== "0"; // 空票时智能引导
@@ -1137,7 +1140,7 @@ function qvStart(form) {
     })),
     custom: f.custom !== false,
   }));
-  live.questionVote = { formId: form.id, title: form.title || "提问", fields, index: 0, answers: {}, cur: { tally: {}, voters: {}, firstVoteAt: null } };
+  live.questionVote = { formId: form.id, title: form.title || "提问", fields, index: 0, answers: {}, startedAt: Date.now(), cur: { tally: {}, voters: {}, firstVoteAt: null } };
   live.blocked = { kind: "question", title: form.title || "提问" };
   console.log("[live] 开始问题投票:", form.title || "", "题数", fields.length);
   changed();
@@ -1172,7 +1175,7 @@ function qvPublic() {
       title: f.title,
       options: f.options.map((o, i) => ({ n: i + 1, label: o.label, votes: qv.cur.tally[o.value] || 0 })),
       free, custom: f.custom,
-      deadline: qv.cur.firstVoteAt ? qv.cur.firstVoteAt + QUESTION_VOTE_MS : null,
+      deadline: qv.cur.firstVoteAt ? qv.cur.firstVoteAt + QUESTION_VOTE_MS : (qv.startedAt || 0) + QUESTION_FALLBACK_MS,
       started: !!qv.cur.firstVoteAt,
     } : null,
     fields: qv.fields.map((x, i) => ({ title: x.title, done: i < qv.index, current: i === qv.index })),
@@ -1182,14 +1185,18 @@ function qvPublic() {
 async function qvTick() {
   const qv = live.questionVote; if (!qv) return;
   const cur = qv.cur;
-  if (!cur.firstVoteAt) return; // 等人投
-  if (Date.now() - cur.firstVoteAt < QUESTION_VOTE_MS) return;
+  // 兜底:本题"无人投票"超时也要作答(否则 question 永久挂着,整个系统卡在 blocked)
+  const since = cur.firstVoteAt || qv.startedAt || 0;
+  const noVote = !cur.firstVoteAt && Date.now() - since >= QUESTION_FALLBACK_MS;
+  if (!cur.firstVoteAt && !noVote) return; // 等人投
+  if (cur.firstVoteAt && Date.now() - cur.firstVoteAt < QUESTION_VOTE_MS) return;
   const f = qv.fields[qv.index];
   let topKey = null, topN = 0;
   for (const k of Object.keys(cur.tally)) if (cur.tally[k] > topN) { topN = cur.tally[k]; topKey = k; }
+  if (f && topKey == null && noVote && f.options.length) { topKey = f.options[0].value; console.log("[live] 问题无人投票,兜底取第一项:", f.title, "→", topKey); }
   if (f && topKey != null) { qv.answers[f.key] = topKey; console.log("[live] 问题投票作答:", f.title, "→", topKey, "(" + topN + "票)"); }
   qv.index += 1;
-  cur.tally = {}; cur.voters = {}; cur.firstVoteAt = null;
+  cur.tally = {}; cur.voters = {}; cur.firstVoteAt = null; qv.startedAt = Date.now();
   if (qv.index < qv.fields.length) { console.log("[live] 进入下一题:", qv.fields[qv.index].title); changed(); return; }
   try {
     await upstreamFetch("/api/session/" + encodeURIComponent(SESSION_ID) + "/form/" + encodeURIComponent(qv.formId) + "/reply", {
@@ -1517,6 +1524,8 @@ async function proposePlan() {
   const recent = live.executed.slice(-12).map((e) => e.text.slice(0, 40)).join(" | ");
   // 受欢迎信号:观众投过票的任务(非自动),按票数降序
   const voted = live.executed.filter((e) => e.src && e.src !== "auto").sort((a, b) => (b.votes || 0) - (a.votes || 0)).slice(0, 5).map((e) => ({ text: e.text.slice(0, 36), votes: e.votes || 0, src: e.src }));
+  // 失败过的:不要重复同样的做法(换更简单/更可行的实现)
+  const failed = live.executed.filter((e) => e.status === "failed").slice(-5).map((e) => e.text.slice(0, 44));
   const guide = live.guide && live.guide.examples ? live.guide.examples.join(" | ") : "";
   const f = live.focus;
   const rounds = f ? f.rounds || 1 : 0;
@@ -1530,6 +1539,7 @@ async function proposePlan() {
       "【动作二选一】improve=挑一个现有页面做**有创意**的升级(优先新玩法/交互/可视化,少做纯样式微调);create=**从零做一个全新的东西**(新页面/新玩法/新工具),并在首页加入口。\n" +
       "【创作取向】优先:" + AUTO_STYLE + "。\n" +
       "【避免重复】不要与『现有页面』里已有的功能、或『最近已做』重复;重复度高的点子直接弃用,换别的。\n" +
+      "【避免失败】不要重复『失败过』里的做法;换更简单、更可能一次做成的实现。\n" +
       "【受众信号】参考『观众投过的』哪些方向受欢迎。\n" +
       (AUTO_WEB ? "【找灵感】可借鉴当下流行的玩法/交互。\n" : "") +
       "【连贯性,重要】" + focusLine + "\n" +
@@ -1540,7 +1550,7 @@ async function proposePlan() {
       headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
       body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0.85, messages: [
         { role: "system", content: sys },
-        { role: "user", content: JSON.stringify({ 现有页面: pages, 最近已做: recent, 观众投过的: voted, 参考方向: guide, 聚焦限制: { min: AUTO_FOCUS_MIN, max: AUTO_FOCUS_MAX } }) },
+        { role: "user", content: JSON.stringify({ 现有页面: pages, 最近已做: recent, 观众投过的: voted, 失败过: failed, 参考方向: guide, 聚焦限制: { min: AUTO_FOCUS_MIN, max: AUTO_FOCUS_MAX } }) },
       ] }),
     });
     if (!r.ok) return null;
@@ -1695,6 +1705,7 @@ function onFinishedEvent() {
 }
 function onFailedEvent() {
   finishRun("failed");
+  if (live.questions && Object.keys(live.questions).length) { live.questions = {}; console.warn("[live] 本轮失败,清掉挂着的 question 收集"); }
   if (live.session !== "idle") { live.session = "idle"; broadcastLive(); }
 }
 function handleSessionEvent(ev) {
@@ -1957,13 +1968,26 @@ async function biliLoop() {
   }
 }
 
+// 兜底看门狗:极端情况下注入卡住(injecting 长期为真)时释放,避免投票与自动创作全体停摆。
+// 会话卡在 running 由 sessionPollLoop 轮询自愈;question 无人投票由 qvTick 兜底作答。
+let injectSince = 0;
+async function stallLoop() {
+  for (;;) {
+    await sleep(10000);
+    if (live.injecting) {
+      if (!injectSince) injectSince = Date.now();
+      else if (Date.now() - injectSince > 90000) { console.warn("[live] 注入疑似卡死 → 复位 injecting"); live.injecting = false; injectSince = 0; }
+    } else injectSince = 0;
+  }
+}
+
 function startLive() {
   if (!LIVE_ENABLED) { console.log("[live] 已禁用(PLAYGROUND_LIVE=0)"); return; }
   if (CHAT_SOURCES.includes("bilibili")) biliLoop();
   if (CHAT_SOURCES.includes("youtube")) ytLoop();
   if (CHAT_SOURCES.includes("ingest")) console.log("[live] 弹幕上报(ingest)已启用:POST /__lb/ingest");
   if (!CHAT_SOURCES.includes("bilibili") && !CHAT_SOURCES.includes("youtube") && !CHAT_SOURCES.includes("ingest")) console.log("[live] 未配置弹幕源(YT_API_KEY/YT_VIDEO_ID 或 BILI_ROOM_ID;也可用 ingest 上报)");
-  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); siteIntentLoop(); guideLoop(); audienceLoop(); autoCreateLoop(); sessionEventLoop(); sessionPollLoop();
+  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); siteIntentLoop(); guideLoop(); audienceLoop(); autoCreateLoop(); sessionEventLoop(); sessionPollLoop(); stallLoop();
   console.log("[live] 直播投票已启动: 轮次=", live.round, "自动接棒=", live.autoDirect, "最小票数=", MIN_VOTES, "自动合并=", MERGE_ENABLED);
   setTimeout(maybeInject, 5000); // 重启后若已有票且会话空闲,补接一轮
 }
