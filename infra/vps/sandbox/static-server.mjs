@@ -1698,7 +1698,7 @@ async function biliLoop() {
   if (!BILI_ROOM_ID) { console.log("[live] 未配置 BILI_ROOM_ID,跳过 B 站弹幕采集"); return; }
   let realRoom;
   for (;;) {
-    try { realRoom = await biliResolveRoom(); live.chat.detail = String(realRoom); live.chat.error = null; break; }
+    try { realRoom = await biliResolveRoom(); live.chat.error = null; break; }
     catch (e) { live.chat.error = String((e && e.message) || e); console.error("[live] B站房间信息:", live.chat.error); await sleep(10000); }
   }
   console.log("[live] B 站弹幕:房间", BILI_ROOM_ID, "→ 真实 room", realRoom);

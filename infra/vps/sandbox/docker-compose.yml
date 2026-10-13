@@ -91,6 +91,8 @@ services:
       YT_VIDEO_ID: ${YT_VIDEO_ID:-}
       # 弹幕源:youtube | bilibili | off(留空 = 按已配置的凭据自动选)
       CHAT_SOURCE: ${CHAT_SOURCE:-}
+      # 外部弹幕上报令牌(POST /__lb/ingest);不填则回退用 PLAYGROUND_ADMIN_TOKEN
+      PLAYGROUND_INGEST_TOKEN: ${PLAYGROUND_INGEST_TOKEN:-}
       # B 站直播间号(短号或真实 room_id);匿名读公开弹幕,无需 OAuth
       BILI_ROOM_ID: ${BILI_ROOM_ID:-}
       # 可选:以「已登录观众」身份读弹幕(低人气房间匿名常收不到)。SESSDATA 敏感,建议小号、只读。
