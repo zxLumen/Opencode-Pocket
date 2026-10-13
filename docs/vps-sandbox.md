@@ -214,6 +214,9 @@ opencode v2.0.x 绑 `0.0.0.0` 时**强制 Basic 鉴权**（不设密码则每次
   不要用绝对 `/api/*`（会撞 opencode）。约定写进沙盒 `AGENTS.md`。
 - **保留端口**：`4096`（opencode）、`47311`（辅助服务）禁止占用/杀进程；访客后端固定 `8000`。
   辅助服务由 `entrypoint.sh` 的**监督循环常驻**，被误杀会自动拉起（否则整站 404）。
+- **独立域名 `preview.<DOMAIN>`**：博客 Caddy 把根路径重写到沙盒的 `/preview/`（`rewrite * /preview{path}`），
+  所以观众做的网站可直接用 `https://preview.<域名>/` 浏览——**相对与绝对路径都可用**
+  （`/api/x` → `/preview/api/x` → 访客后端）。该段由 `ci-run.sh` 的 `ensure_preview_route` 幂等补上（防博客仓库覆盖）。
 
 ## 访客后端自愈（部署后自动恢复）
 

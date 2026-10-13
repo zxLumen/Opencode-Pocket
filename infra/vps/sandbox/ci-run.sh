@@ -79,9 +79,32 @@ PY
     echo "==> 已补丁并 reload"
   fi
 }
+# 自愈:确保博客 Caddyfile 有 preview.<DOMAIN>(观众在沙盒里做的网站的独立域名)。
+# 博客仓库重新部署可能覆盖该文件,故每次部署都幂等补一次。
+ensure_preview_route() {
+  local F="/home/ubuntu/zxLumen-Blog/docker/Caddyfile"
+  [ -f "${F}" ] || return 0
+  grep -q 'preview\.{\$DOMAIN}' "${F}" && return 0
+  echo "==> 补 preview 子域:${F}"
+  cat >> "${F}" <<'CADDY'
+
+# 观众在沙盒里做的网站(独立域名;由 Opencode-Pocket ci-run.sh 自愈补上)
+preview.{$DOMAIN} {
+	rewrite * /preview{path}
+	reverse_proxy sandbox-caddy:80
+}
+CADDY
+  if docker exec docker-caddy-1 caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+    docker exec docker-caddy-1 caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || true
+    echo "==> 已补 preview 子域并 reload"
+  fi
+}
+
 ensure_pocketd_route || true
+ensure_preview_route || true
 
 ./deploy.sh "${IMAGE_TAG}"
 
 # deploy 之后再确保一次（避免本次部署过程中被覆盖）
 ensure_pocketd_route || true
+ensure_preview_route || true
