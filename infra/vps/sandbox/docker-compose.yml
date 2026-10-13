@@ -100,6 +100,10 @@ services:
       # 自动创作「聚焦」:最少停留轮数 / 软上限(到点建议换)
       PLAYGROUND_AUTO_FOCUS_MIN: ${PLAYGROUND_AUTO_FOCUS_MIN:-3}
       PLAYGROUND_AUTO_FOCUS_MAX: ${PLAYGROUND_AUTO_FOCUS_MAX:-6}
+      # 自动创作取向(写进提示词,告诉模型偏向哪些方向)
+      PLAYGROUND_AUTO_STYLE: ${PLAYGROUND_AUTO_STYLE:-}
+      # 允许在任务里提示 agent 先联网找灵感(0=关闭)
+      PLAYGROUND_AUTO_WEB: ${PLAYGROUND_AUTO_WEB:-1}
       # B 站直播间号(短号或真实 room_id);匿名读公开弹幕,无需 OAuth
       BILI_ROOM_ID: ${BILI_ROOM_ID:-}
       # 可选:以「已登录观众」身份读弹幕(低人气房间匿名常收不到)。SESSDATA 敏感,建议小号、只读。

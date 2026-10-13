@@ -404,6 +404,9 @@ Xvfb(虚拟屏 1280x720)
     聚焦上继续，超过 `AUTO_FOCUS_MIN` 才可换，`PLAYGROUND_AUTO_FOCUS_MAX`（默认 6）到点**建议换**新方向；
     `create` 出的新东西会成为新聚焦继续做几轮。
   - 有票时**让位给观众**；上限 `PLAYGROUND_AUTO_CREATE_MAX`（0=不限）。榜单底部显示「当前聚焦」。
+  - **灵感来源（全部由网关模型生成）**：每页**画像**（文件名+标题+大小+更新+主要按钮/标题要素+摘要）、
+    「最近已做」、**「观众投过的」任务（受欢迎信号）**、`PLAYGROUND_AUTO_STYLE` 偏好、以及聚焦约束；
+    明确要求**避免与现有页面/最近已做重复**；`PLAYGROUND_AUTO_WEB=1` 时任务里提示 agent **先联网找灵感**。
 - **阻塞处理（question / permission / form）**：agent 提问或申请权限时**暂停意见接棒**（不注入、不拿意见投票答题，
   意见池数据保留）。**question 默认改为「逐题弹幕投票」**（`PLAYGROUND_QUESTION_POLICY=vote`）：
   会话级 form 的每题各开一轮，观众发 `#序号`/选项文字/整句选择语（「第一个」「选2」「1号」等）投票，

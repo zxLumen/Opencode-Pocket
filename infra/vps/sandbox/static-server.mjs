@@ -538,6 +538,8 @@ const AUTO_CREATE_MS = Number(process.env.PLAYGROUND_AUTO_CREATE_INTERVAL_SEC ||
 const AUTO_CREATE_MAX = Number(process.env.PLAYGROUND_AUTO_CREATE_MAX || 0); // 0 = 不限
 const AUTO_FOCUS_MIN = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MIN || 3)); // 聚焦最少停留轮数
 const AUTO_FOCUS_MAX = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MAX || 6)); // 聚焦软上限(到点建议换)
+const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "小游戏 / 可视化 / 互动投票 / AI 演示 / 实用小工具";
+const AUTO_WEB = process.env.PLAYGROUND_AUTO_WEB !== "0"; // 允许在任务里提示 agent 先联网找灵感
 const YT_API_KEY = process.env.YT_API_KEY || "";
 const YT_VIDEO_ID = (process.env.YT_VIDEO_ID || "").trim();
 const YT_POLL_MS = Number(process.env.YT_POLL_MS || 0);
@@ -1490,13 +1492,19 @@ function fireSite(cmd) {
 async function sitePages() {
   const out = [];
   try {
-    const files = (await readdir(WORKSPACE)).filter((f) => f.endsWith(".html")).slice(0, 20);
+    const files = (await readdir(WORKSPACE)).filter((f) => f.endsWith(".html")).slice(0, 24);
     for (const f of files) {
       try {
-        const h = await readFile(join(WORKSPACE, f), "utf8");
+        const p = join(WORKSPACE, f);
+        const [h, st] = await Promise.all([readFile(p, "utf8"), stat(p)]);
+        const strip = (s) => String(s || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
         const title = ((h.match(/<title>([^<]*)<\/title>/i) || [])[1] || "").trim();
-        const brief = h.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
-        out.push({ file: f, title: title, brief: brief });
+        const labels = [];
+        const re = /<(button|a|h1|h2|h3)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+        let m;
+        while ((m = re.exec(h)) && labels.length < 12) { const t = strip(m[2]).slice(0, 14); if (t) labels.push(t); }
+        const brief = strip(h.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")).slice(0, 120);
+        out.push({ file: f, title: title, kb: Math.round(st.size / 1024), updated: new Date(st.mtimeMs).toISOString().slice(5, 16).replace("T", " "), brief: brief, 要素: Array.from(new Set(labels)) });
       } catch {}
     }
   } catch {}
@@ -1506,7 +1514,9 @@ async function sitePages() {
 async function proposePlan() {
   if (!GATEWAY_TOKEN) return null;
   const pages = await sitePages();
-  const recent = live.executed.slice(-8).map((e) => e.text).join(" | ").slice(0, 400);
+  const recent = live.executed.slice(-12).map((e) => e.text.slice(0, 40)).join(" | ");
+  // 受欢迎信号:观众投过票的任务(非自动),按票数降序
+  const voted = live.executed.filter((e) => e.src && e.src !== "auto").sort((a, b) => (b.votes || 0) - (a.votes || 0)).slice(0, 5).map((e) => ({ text: e.text.slice(0, 36), votes: e.votes || 0, src: e.src }));
   const guide = live.guide && live.guide.examples ? live.guide.examples.join(" | ") : "";
   const f = live.focus;
   const rounds = f ? f.rounds || 1 : 0;
@@ -1517,7 +1527,11 @@ async function proposePlan() {
   else focusLine = "当前聚焦已做 " + rounds + " 轮 → 建议换一个新方向。";
   try {
     const sys = "你是无人值守的直播导演,站在【观众视角】安排下一轮(观众只能看到右侧预览的一屏)。\n" +
-      "【动作二选一】improve=挑一个现有页面做**有创意**的升级(优先新玩法/交互/可视化,少做纯样式微调);create=**从零做一个全新的东西**(新页面/新玩法/新工具),并在首页加入口,避免与现有页面重复。\n" +
+      "【动作二选一】improve=挑一个现有页面做**有创意**的升级(优先新玩法/交互/可视化,少做纯样式微调);create=**从零做一个全新的东西**(新页面/新玩法/新工具),并在首页加入口。\n" +
+      "【创作取向】优先:" + AUTO_STYLE + "。\n" +
+      "【避免重复】不要与『现有页面』里已有的功能、或『最近已做』重复;重复度高的点子直接弃用,换别的。\n" +
+      "【受众信号】参考『观众投过的』哪些方向受欢迎。\n" +
+      (AUTO_WEB ? "【找灵感】可借鉴当下流行的玩法/交互。\n" : "") +
       "【连贯性,重要】" + focusLine + "\n" +
       "【页面操作(before/after,可选)】只支持这些**精确形状**:{\"type\":\"goto\",\"path\":\"页面文件名\"} 或 {\"type\":\"scroll\",\"dir\":\"up|down|top|bottom\"} 或 {\"type\":\"click\",\"text\":\"要点文字\"} 或 {\"type\":\"reload\"} 或 {\"type\":\"back\"};不需要就省略该字段。\n" +
       "只输出 JSON:{\"action\":\"improve|create\",\"page\":\"现有页面文件名(improve 时)\",\"title\":\"新东西名字(create 时)\",\"task\":\"一句话,具体可执行\",\"before\":{...},\"after\":{...}}。不要解释。";
@@ -1526,7 +1540,7 @@ async function proposePlan() {
       headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
       body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0.85, messages: [
         { role: "system", content: sys },
-        { role: "user", content: JSON.stringify({ 现有页面: pages, 最近已做: recent, 参考方向: guide, 聚焦限制: { min: AUTO_FOCUS_MIN, max: AUTO_FOCUS_MAX } }) },
+        { role: "user", content: JSON.stringify({ 现有页面: pages, 最近已做: recent, 观众投过的: voted, 参考方向: guide, 聚焦限制: { min: AUTO_FOCUS_MIN, max: AUTO_FOCUS_MAX } }) },
       ] }),
     });
     if (!r.ok) return null;
@@ -1543,7 +1557,16 @@ async function proposePlan() {
     if (!task) return null;
     // 最少停留:聚焦未满 MIN 时强制沿用旧聚焦(不换页、不换动作)
     if (f && rounds < AUTO_FOCUS_MIN) { action = f.action || action; if (f.action === "improve" && f.page) page = f.page; }
-    return { action: action, page: page, title: title, task: task, before: sanitizeSite(o && o.before), after: sanitizeSite(o && o.after) };
+    // 页面名兜底:从 task 里解析 *.html
+    if (!page) { const mm = task.match(/([a-zA-Z0-9_-]+\.html)/); if (mm) page = mm[1]; }
+    // 不依赖模型给的 before/after:据 action+page 自己推导 goto,确保一定切到目标页
+    let before = sanitizeSite(o && o.before);
+    let after = sanitizeSite(o && o.after);
+    if (page) {
+      if (action === "improve") { if (!before) before = { type: "goto", path: page }; if (!after) after = { type: "goto", path: page }; }
+      else if (action === "create" && !after) after = { type: "goto", path: page };
+    }
+    return { action: action, page: page, title: title, task: task, before: before, after: after };
   } catch { return null; }
 }
 async function waitIdle(timeoutMs) {
@@ -1569,7 +1592,7 @@ async function autoCreateLoop() {
     if (Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue;
     const plan = await proposePlan();
     if (!plan || !plan.task) continue;
-    const taskText = (plan.action === "create" ? "【新建】" : (plan.page ? "【改造 " + plan.page + "】" : "【改造】")) + plan.task;
+    const taskText = (plan.action === "create" ? "【新建】" : (plan.page ? "【改造 " + plan.page + "】" : "【改造】")) + plan.task + (AUTO_WEB ? "（可先联网检索、参考当下流行玩法/设计再动手）" : "");
     if (taskText === live.lastSentText) continue;
     const same = live.focus && live.focus.action === plan.action && (live.focus.page || "") === (plan.page || "");
     live.focus = { action: plan.action, page: plan.page, title: plan.title || (same && live.focus.title) || "", rounds: same ? (live.focus.rounds || 1) + 1 : 1, at: Date.now() };
@@ -1633,6 +1656,7 @@ async function injectTop(top, src) {
     } catch (e) { console.error("[live] 注入失败:", (e && e.message) || e); return false; }
   } finally { live.injecting = false; }
   const entry = { round: live.round, text: (src === "auto" ? "【自动】" : "") + top.text, votes: top.votes, src: src === "auto" ? "auto" : (top.src || "?"), at: Date.now(), status: "running" };
+  for (const e of live.executed) if (e.status === "running") e.status = "done"; // 新一轮开始→旧的「执行中」视为完成(避免永久卡在执行中)
   live.executed.push(entry);
   if (live.executed.length > 200) live.executed = live.executed.slice(-200);
   live.currentRun = entry;
