@@ -1571,7 +1571,7 @@ async function proposePlan() {
       "【受众信号】参考『观众投过的』哪些方向受欢迎。\n" +
       (AUTO_WEB ? "【找灵感】可借鉴当下流行的玩法/交互。\n" : "") +
       "【连贯性,重要】" + focusLine + "\n" +
-      "【观众视角,重要】观众只能看到预览的**一屏**,且不会自己操作。若你要做的事**不在『当前展示』那一页**,你必须用 before 的页面操作**把观众带过去**——像真观众一样:当前页上有通往目标的**入口/链接**就优先用 `click`(文字用页面上真实的入口文字),没有入口再用 `goto`。\n" +
+      "【观众视角,重要】观众只能看到预览的**一屏**,且不会自己操作。若你要做的事**不在『当前展示』那一页**,你必须用 before 的页面操作**把观众带过去**——像真观众一样:当前页上有通往目标的**入口/链接**就优先用 `click`(文字用页面上真实的入口文字),没有入口再用 `goto`。**要展示某页就必须导航过去(click/goto);不要用 reload/scroll 代替**。\n" +
       "【观众不能操作网页,重要】观众只能看直播画面,**无法点击/拖动网页**。别做「必须观众动手才有反应」的东西;优先做**不用操作也能看**的(自动演示/自动走位/循环动画/可视化/AI自动对局/实时榜单/弹幕飘屏),或把交互接到**弹幕/投票**上(页面可读 `__audience.json` 与 `../__lb/state`)。\n" +
       "【页面操作(before/after,可选)】只支持这些**精确形状**:{\"type\":\"goto\",\"path\":\"页面文件名\"} 或 {\"type\":\"scroll\",\"dir\":\"up|down|top|bottom\"} 或 {\"type\":\"click\",\"text\":\"要点文字\"} 或 {\"type\":\"reload\"} 或 {\"type\":\"back\"};不需要就省略该字段。\n" +
       "只输出 JSON:{\"action\":\"improve|create\",\"page\":\"现有页面文件名(improve 时)\",\"title\":\"新东西名字(create 时)\",\"task\":\"一句话,具体可执行\",\"before\":{...},\"after\":{...}}。不要解释。";
@@ -1606,9 +1606,15 @@ async function proposePlan() {
     // 不依赖模型给的 before/after:据 action+page 自己推导 goto,确保一定切到目标页
     let before = sanitizeSite(o && o.before);
     let after = sanitizeSite(o && o.after);
+    // 观众视角兜底:要让人看到目标页,就必须"导航过去"(click 入口 或 goto),reload/scroll 不算
+    const nav = (s) => s && (s.type === "goto" || s.type === "click");
     if (page) {
-      if (action === "improve") { if (!before) before = { type: "goto", path: page }; if (!after) after = { type: "goto", path: page }; }
-      else if (action === "create" && !after) after = { type: "goto", path: page };
+      if (action === "improve") {
+        if (!nav(before)) before = { type: "goto", path: page };
+        if (!nav(after)) after = { type: "goto", path: page };
+      } else if (action === "create") {
+        if (!nav(after)) after = { type: "goto", path: page };
+      }
     }
     return { action: action, page: page, title: title, task: task, before: before, after: after };
   } catch { return null; }
@@ -1646,7 +1652,7 @@ async function autoCreateLoop() {
     if (taskText === live.lastSentText) continue;
     const same = live.focus && live.focus.action === plan.action && (live.focus.page || "") === (plan.page || "");
     live.focus = { action: plan.action, page: plan.page, title: plan.title || (same && live.focus.title) || "", rounds: same ? (live.focus.rounds || 1) + 1 : 1, at: Date.now() };
-    console.log("[live] 空闲自动创作[" + (plan.action === "create" ? "新建" : "改造 " + (plan.page || "")) + "] 聚焦第", live.focus.rounds, "轮:", plan.task);
+    console.log("[live] 空闲自动创作[" + (plan.action === "create" ? "新建" : "改造 " + (plan.page || "")) + "] 聚焦第", live.focus.rounds, "轮:", plan.task, "| before=" + JSON.stringify(plan.before || null) + " after=" + JSON.stringify(plan.after || null));
     // 1) before:先把观众视角切到相关页面/位置 —— 并入票池(kind:site),观众可见,按 SITE_VOTE_MS 用票首执行
     if (plan.before && SITE_CMD_ENABLED) { enqueueSiteAuto(plan.before); await sleep(SITE_VOTE_MS + 1500); }
     // 2) task:交给 AI 做(带上目标页/动作)
