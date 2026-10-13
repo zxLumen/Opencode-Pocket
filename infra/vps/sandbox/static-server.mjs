@@ -1228,6 +1228,7 @@ function siteKey(cmd) { return cmd.type === "scroll" ? "site:scroll:" + cmd.dir 
 function siteLabel(cmd) {
   if (cmd.type === "scroll") return "▶ " + ({ down: "下滚", up: "上滚", top: "回顶部", bottom: "到底部" }[cmd.dir] || "滚动");
   if (cmd.type === "click") return "▶ 点开 " + cmd.text;
+  if (cmd.type === "goto") return "▶ 打开 " + String(cmd.path || "").replace(/\.html$/i, "");
   return cmd.type === "back" ? "▶ 返回" : "▶ 刷新";
 }
 function siteVote(cmd, channelId) {
