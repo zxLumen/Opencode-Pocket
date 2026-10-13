@@ -575,6 +575,7 @@ let live = {
   questionVote: null, // 问题投票状态机(逐题)
   site: null, // 最近一次下发的网站操作 {seq,type,...}
   siteSeq: 0,
+  page: null, // 观众当前展示的页面(最近一次 goto 的结果;仅作提示喂给模型,不做任何强制)
   siteFirstAt: null,
   focus: null, // 自动创作聚焦 { action, page, title, rounds }
   guide: null, // { examples:[...], at }
@@ -593,6 +594,7 @@ async function loadLive() {
       live.lastSentText = d.lastSentText || null;
       live.lastInjectAt = Number(d.lastInjectAt) || 0;
       live.focus = d.focus && typeof d.focus === "object" ? d.focus : null;
+      live.page = typeof d.page === "string" ? d.page : null;
       live.currentRun = [...live.executed].reverse().find((e) => e && e.status === "running") || null;
       live.audience = (d.audience && typeof d.audience === "object") ? d.audience : {};
     }
@@ -608,7 +610,7 @@ function saveLive() {
       const tmp = STATE_FILE + ".tmp";
       const data = {
         round: live.round, autoDirect: live.autoDirect, options: live.options,
-        executed: live.executed.slice(-200), lastSentText: live.lastSentText, lastInjectAt: live.lastInjectAt, focus: live.focus,
+        executed: live.executed.slice(-200), lastSentText: live.lastSentText, lastInjectAt: live.lastInjectAt, focus: live.focus, page: live.page,
         audience: live.audience || {},
       };
       await writeFile(tmp, JSON.stringify(data));
@@ -1503,6 +1505,7 @@ function sanitizeSite(s) {
 // 立即在预览执行页面操作(导演自己的「镜头移动」,不进 5s 投票窗口)
 function fireSite(cmd) {
   live.site = { seq: (live.siteSeq = (live.siteSeq || 0) + 1), ...cmd };
+  if (cmd.type === "goto" && cmd.path) live.page = cmd.path; // 仅记录观众当前在哪页(供模型参考)
   console.log("[live] 预览移动:", siteLabel(cmd), JSON.stringify(cmd));
   changed();
 }
@@ -1538,6 +1541,7 @@ async function proposePlan() {
   // 失败过的:不要重复同样的做法(换更简单/更可行的实现)
   const failed = live.executed.filter((e) => e.status === "failed").slice(-5).map((e) => e.text.slice(0, 44));
   const guide = live.guide && live.guide.examples ? live.guide.examples.join(" | ") : "";
+  const cur = live.page || ""; // 观众当前正在看的那一页(仅提示,由模型自行决定怎么带观众过去)
   const f = live.focus;
   const rounds = f ? f.rounds || 1 : 0;
   let focusLine;
@@ -1554,6 +1558,7 @@ async function proposePlan() {
       "【受众信号】参考『观众投过的』哪些方向受欢迎。\n" +
       (AUTO_WEB ? "【找灵感】可借鉴当下流行的玩法/交互。\n" : "") +
       "【连贯性,重要】" + focusLine + "\n" +
+      "【观众视角,重要】观众只能看到预览的**一屏**,且不会自己操作。若你要做的事**不在『当前展示』那一页**,你必须用 before 的页面操作**把观众带过去**——像真观众一样:当前页上有通往目标的**入口/链接**就优先用 `click`(文字用页面上真实的入口文字),没有入口再用 `goto`。\n" +
       "【页面操作(before/after,可选)】只支持这些**精确形状**:{\"type\":\"goto\",\"path\":\"页面文件名\"} 或 {\"type\":\"scroll\",\"dir\":\"up|down|top|bottom\"} 或 {\"type\":\"click\",\"text\":\"要点文字\"} 或 {\"type\":\"reload\"} 或 {\"type\":\"back\"};不需要就省略该字段。\n" +
       "只输出 JSON:{\"action\":\"improve|create\",\"page\":\"现有页面文件名(improve 时)\",\"title\":\"新东西名字(create 时)\",\"task\":\"一句话,具体可执行\",\"before\":{...},\"after\":{...}}。不要解释。";
     const r = await fetch(GATEWAY_URL + "/chat/completions", {
@@ -1561,7 +1566,7 @@ async function proposePlan() {
       headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
       body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0.85, messages: [
         { role: "system", content: sys },
-        { role: "user", content: JSON.stringify({ 现有页面: pages, 最近已做: recent, 观众投过的: voted, 失败过: failed, 参考方向: guide, 聚焦限制: { min: AUTO_FOCUS_MIN, max: AUTO_FOCUS_MAX } }) },
+        { role: "user", content: JSON.stringify({ 当前展示: cur || "(未知)", 现有页面: pages, 最近已做: recent, 观众投过的: voted, 失败过: failed, 参考方向: guide, 聚焦限制: { min: AUTO_FOCUS_MIN, max: AUTO_FOCUS_MAX } }) },
       ] }),
     });
     if (!r.ok) return null;
