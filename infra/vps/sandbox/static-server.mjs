@@ -103,7 +103,7 @@ async function serveSw(req, res) {
 // 这里只保留与语言无关的收尾:隐藏模型按钮、宽会话栏铺满、注入 Plan/Build。
 const SHELL_CSS = [
   '[data-slot=user-message-meta],[data-slot=text-part-meta],[data-slot="tabs"]{display:none!important}',
-  'button[data-action="composer-model"],button[data-component="icon-button-v2"][aria-haspopup="true"]:not([data-action]){display:none!important}',
+  'button[data-action="composer-model"],button.composer-variant-default,button[data-component="icon-button-v2"][aria-haspopup="true"]:not([data-action]){display:none!important}',
   '[class*="md:max-w-200"],[class*="2xl:max-w-[1000px]"]{max-width:none!important}',
   '[data-zx-ag]{display:inline-flex;gap:4px;margin:0 2px;padding:2px;align-items:center}',
   '[data-zx-ag] button{font:12px/1.2 system-ui;color:inherit;background:transparent;border:1px solid rgba(128,128,128,.4);border-radius:999px;padding:2px 10px;cursor:pointer}',
@@ -113,21 +113,22 @@ const SHELL_CSS = [
 
 const SHELL_CLIENT = `(function(){
 var S=JSON.stringify(location.pathname.replace(/\\/+$/,""));
-var AG="zx-sandbox-agent";
+var curAgent="plan";
 try{var RK="settings.v3",rw=localStorage.getItem(RK),ro=rw?JSON.parse(rw):{};ro=(ro&&typeof ro==="object")?ro:{};ro.general=(ro.general&&typeof ro.general==="object")?ro.general:{};if(ro.general.showReasoningSummaries!==true){ro.general.showReasoningSummaries=true;localStorage.setItem(RK,JSON.stringify(ro));}}catch(err){}
 try{if(!localStorage.getItem("highlights.v1"))localStorage.setItem("highlights.v1",JSON.stringify({version:"seen"}));}catch(err){}
 var SEL='[data-slot=user-message-meta],[data-slot=text-part-meta]';
 function hideNow(n){try{var e=n.querySelectorAll(SEL);for(var i=0;i<e.length;i++)e[i].style.setProperty("display","none","important");}catch(err){}}
 function hideAll(){try{var e=document.querySelectorAll(SEL);for(var i=0;i<e.length;i++)e[i].style.setProperty("display","none","important");}catch(err){}}
-function ag(){try{var m=document.querySelector('button[data-action="composer-model"]');if(!m||!m.parentElement)return;var host=m.parentElement,cur=localStorage.getItem(AG)||"plan",bar=document.querySelector("[data-zx-ag]");if(bar&&bar.dataset.v===cur)return;if(!bar){bar=document.createElement("div");bar.setAttribute("data-zx-ag","1");host.appendChild(bar);}bar.dataset.v=cur;bar.textContent="";["plan","build"].forEach(function(a){var b=document.createElement("button");b.textContent=a==="plan"?"Plan":"Build";if(a===cur)b.className="on";b.addEventListener("click",function(){try{fetch("/api/session/ses_guest/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent:a})});}catch(err){}localStorage.setItem(AG,a);bar.dataset.v="";ag();});bar.appendChild(b);});}catch(err){}}
+function renderAg(){try{var m=document.querySelector('button[data-action="composer-model"]');if(!m||!m.parentElement)return;var host=m.parentElement,bar=document.querySelector("[data-zx-ag]");if(bar&&bar.dataset.v===curAgent)return;if(!bar){bar=document.createElement("div");bar.setAttribute("data-zx-ag","1");host.appendChild(bar);}bar.dataset.v=curAgent;bar.textContent="";["plan","build"].forEach(function(a){var b=document.createElement("button");b.textContent=a==="plan"?"Plan":"Build";if(a===curAgent)b.className="on";b.addEventListener("click",function(){try{fetch("/api/session/ses_guest/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent:a})});}catch(err){}curAgent=a;bar.dataset.v="";renderAg();setTimeout(fetchAgent,300);});bar.appendChild(b);});}catch(err){}}
+function fetchAgent(){try{fetch("/api/session/ses_guest",{headers:{Accept:"application/json"}}).then(function(r){return r.json();}).then(function(d){var a=d&&d.data&&d.data.agent;if(a&&a!==curAgent){curAgent=a;renderAg();}}).catch(function(){});}catch(err){}}
 function guard(){var p=location.pathname;if((p==="/"||p==="/global"||p==="/global/")&&S)location.replace(S);}
-function syncAgent(){var want=localStorage.getItem(AG)||"plan";try{fetch("/api/session/ses_guest",{headers:{Accept:"application/json"}}).then(function(r){return r.json();}).then(function(d){var cur=d&&d.data&&d.data.agent;if(cur&&cur!==want)return fetch("/api/session/ses_guest/agent",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({agent:want})}).catch(function(){});}).catch(function(){});}catch(err){}}
+// 模式以服务端为准:见 renderAg / fetchAgent(实时同步)
 var q=[],sched=false;
-function flush(){sched=false;var l=q;q=[];for(var i=0;i<l.length;i++)hideNow(l[i]);ag();}
+function flush(){sched=false;var l=q;q=[];for(var i=0;i<l.length;i++)hideNow(l[i]);renderAg();}
 function onMut(recs){var dirty=false;for(var i=0;i<recs.length;i++){var r=recs[i];if(r.type!=="childList")continue;dirty=true;for(var j=0;j<r.addedNodes.length;j++){var a=r.addedNodes[j];if(a.nodeType===1)q.push(a);}}if(dirty&&!sched){sched=true;requestAnimationFrame(flush);}}
-function run(){hideAll();ag();}
+function run(){hideAll();renderAg();}
 new MutationObserver(onMut).observe(document.documentElement,{childList:true,subtree:true});
-document.addEventListener("DOMContentLoaded",function(){run();syncAgent();});run();guard();setInterval(guard,800);
+document.addEventListener("DOMContentLoaded",function(){run();fetchAgent();setInterval(fetchAgent,2000);});run();guard();setInterval(guard,800);
 function keyb(ev){if(!(ev.metaKey||ev.ctrlKey))return;var k=(ev.key||"").toLowerCase();if(k==="k"||k==="n"||k===","||k==="p"||(k==="r"&&ev.shiftKey)){ev.preventDefault();ev.stopImmediatePropagation();}}
 window.addEventListener("keydown",keyb,true);document.addEventListener("keydown",keyb,true);
 function slashG(ev){var k=ev.key;if(k!=="/"&&k!=="Enter")return;var t=ev.target;var pi=t&&t.closest?t.closest('[data-component="composer-editor"]'):null;if(!pi)return;var x=(pi.textContent||"").trim();if(k==="/"&&x===""){ev.preventDefault();ev.stopImmediatePropagation();}if(k==="Enter"&&!ev.shiftKey&&x.charAt(0)==="/"){ev.preventDefault();ev.stopImmediatePropagation();}}
@@ -556,6 +557,8 @@ let live = {
   lastInjectAt: 0,
   currentRun: null,
   session: "unknown",
+  blocked: null, // { kind: question|permission|form, title }
+  questions: {}, // SSE 收集的待答问题 id -> {id, questions}
   chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, loggedIn: Boolean(BILI_SESSDATA), chatId: null, videoId: YT_VIDEO_ID || null, detail: CHAT_SOURCE === "bilibili" ? (BILI_ROOM_ID || null) : (YT_VIDEO_ID || null), lastAt: 0, error: null },
 };
 
@@ -602,6 +605,7 @@ function publicState() {
     round: live.round,
     autoDirect: live.autoDirect,
     session: live.session,
+    blocked: live.blocked,
     minVotes: MIN_VOTES,
     cooldownSec: Math.round(COOLDOWN_MS / 1000),
     maxRounds: MAX_ROUNDS,
@@ -903,6 +907,131 @@ async function upstreamFetch(path, opts = {}) {
   const headers = { accept: "application/json", ...(UPSTREAM_AUTH ? { authorization: UPSTREAM_AUTH } : {}), ...(opts.headers || {}) };
   return fetch(UPSTREAM + path, { ...opts, headers });
 }
+// 观众投票驱动的模式切换:命中则系统代切(plan/build),前端实时同步(见 SHELL_CLIENT)
+const SWITCH_HINT_RE = /(切换|切到|切为|换成|换到|模式|plan|build|计划|构建|switch|mode)/i;
+async function detectSwitch(text) {
+  if (!SWITCH_HINT_RE.test(text)) return null;
+  if (GATEWAY_TOKEN) {
+    try {
+      const sys = "判断这句观众弹幕是否在要求把 AI 的工作模式在 plan(规划) 与 build(构建) 之间切换。只输出 JSON:{\"switch\":\"plan\"|\"build\"|\"none\"}。";
+      const r = await fetch(GATEWAY_URL + "/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
+        body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0, messages: [{ role: "system", content: sys }, { role: "user", content: text }] }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        const c = String((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "");
+        const m = c.match(/"switch"\s*:\s*"(plan|build|none)"/i);
+        if (m) return m[1].toLowerCase() === "none" ? null : m[1].toLowerCase();
+      }
+    } catch (e) { console.error("[live] 模式切换判定失败:", (e && e.message) || e); }
+  }
+  if (/build|构建/i.test(text)) return "build";
+  if (/plan|计划/i.test(text)) return "plan";
+  return null;
+}
+// ---------- 阻塞(question/permission/form)处理:暂停接棒 + 网关代答 ----------
+// 观众投票是「下一轮想让模型做的事」,不是 question 的答案 → 阻塞期间不注入、不拿投票答题。
+const QUESTION_POLICY = String(process.env.PLAYGROUND_QUESTION_POLICY || "auto").toLowerCase(); // auto|pause
+const PERMISSION_POLICY = String(process.env.PLAYGROUND_PERMISSION_POLICY || "reject").toLowerCase(); // reject|once|always
+async function upJSON(path) {
+  const r = await upstreamFetch(path);
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+function askLabel(o) { return o && (o.label != null ? String(o.label) : (o.value != null ? String(o.value) : String(o))); }
+async function gatewayPick(payload) {
+  if (!GATEWAY_TOKEN) return null;
+  try {
+    const sys = "你是无人值守的直播导演。agent 向你提问/请求,请在选项中选一个最稳妥、能推进任务且避免破坏性操作的。只输出 JSON:{\"choices\":[\"<选项label>\"]}。";
+    const r = await fetch(GATEWAY_URL + "/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
+      body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0, messages: [{ role: "system", content: sys }, { role: "user", content: JSON.stringify(payload) }] }),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const c = String((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "");
+    const s = c.indexOf("["), e = c.lastIndexOf("]");
+    if (s < 0 || e < s) return null;
+    const arr = JSON.parse(c.slice(s, e + 1));
+    return Array.isArray(arr) ? arr.map(String) : null;
+  } catch { return null; }
+}
+async function answerQuestion(id, questions) {
+  const list = Array.isArray(questions) && questions.length ? questions : [{}];
+  const answers = [];
+  for (const one of list) {
+    const opts = (one.options || []).map(askLabel).filter(Boolean);
+    let picked = [];
+    const g = opts.length ? await gatewayPick({ question: one.question || one.header || "", options: opts, multiple: !!one.multiple }) : null;
+    if (g) picked = g.filter((x) => opts.includes(x));
+    if (!picked.length && opts.length) picked = [opts[0]];
+    answers.push(picked);
+  }
+  await upstreamFetch("/api/session/" + encodeURIComponent(SESSION_ID) + "/question/" + encodeURIComponent(id) + "/reply", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answers }),
+  });
+  return answers;
+}
+async function replyPermission(id, decision) {
+  await upstreamFetch("/api/session/" + encodeURIComponent(SESSION_ID) + "/permission/" + encodeURIComponent(id) + "/reply", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ decision }),
+  });
+}
+async function answerForm(id, fields) {
+  const answer = {};
+  for (const f of fields || []) {
+    if (f.hidden) continue;
+    const t = String(f.type || "string");
+    if (t === "boolean") answer[f.key] = false;
+    else if (t === "number" || t === "integer") answer[f.key] = 0;
+    else if (t === "multiselect") answer[f.key] = [];
+    else answer[f.key] = "";
+  }
+  await upstreamFetch("/api/session/" + encodeURIComponent(SESSION_ID) + "/form/" + encodeURIComponent(id) + "/reply", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answer }),
+  });
+  return answer;
+}
+let askBusy = false;
+async function askLoop() {
+  for (;;) {
+    await sleep(2500);
+    if (askBusy) continue;
+    askBusy = true;
+    let blocked = null;
+    try {
+      try { // permission
+        const p = await upJSON("/api/permission/request");
+        for (const it of ((p && p.data) || []).filter((x) => !x.sessionID || x.sessionID === SESSION_ID)) {
+          if (QUESTION_POLICY !== "pause") {
+            await replyPermission(it.id, PERMISSION_POLICY);
+            console.log("[live] 代答 permission →", PERMISSION_POLICY, ":", it.action || "", (it.resources || []).join(" "));
+          } else blocked = { kind: "permission", title: (it.action || "权限申请") + " " + (it.resources || []).join(" ") };
+        }
+      } catch {}
+      try { // form(question 常经此)
+        const f = await upJSON("/api/form");
+        for (const it of ((f && f.data) || []).filter((x) => !x.sessionID || x.sessionID === SESSION_ID)) {
+          if (QUESTION_POLICY !== "pause") { await answerForm(it.id, it.fields); console.log("[live] 代答 form:", it.title || ""); }
+          else blocked = { kind: "form", title: it.title || "表单" };
+        }
+      } catch {}
+      for (const id of Object.keys(live.questions || {})) { // question(SSE 收集)
+        const q = live.questions[id];
+        const title = (q.questions && q.questions[0] && (q.questions[0].header || q.questions[0].question)) || "提问";
+        if (QUESTION_POLICY !== "pause") { await answerQuestion(id, q.questions); console.log("[live] 代答 question:", title); delete live.questions[id]; }
+        else blocked = { kind: "question", title };
+      }
+    } catch (e) { console.error("[live] askLoop:", (e && e.message) || e); }
+    askBusy = false;
+    const changedBlocked = JSON.stringify(blocked) !== JSON.stringify(live.blocked);
+    live.blocked = blocked;
+    if (changedBlocked) broadcastLive();
+  }
+}
 function topOption() {
   const s = sortedOptions();
   return s.length ? s[0] : null;
@@ -921,6 +1050,24 @@ async function injectTop(top) {
   }
   live.injecting = true;
   try {
+    const sw = await detectSwitch(top.text);
+    if (sw) { // 观众投票要求切换模式 → 系统代切(不注入工作提示)
+      const r = await upstreamFetch("/api/session/" + encodeURIComponent(SESSION_ID) + "/agent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ agent: sw }),
+      });
+      if (!r.ok) throw new Error("agent HTTP " + r.status);
+      const e2 = { round: live.round, text: "【切换模式】→ " + sw, votes: top.votes, at: Date.now(), status: "done" };
+      live.executed.push(e2);
+      if (live.executed.length > 200) live.executed = live.executed.slice(-200);
+      live.lastInjectAt = e2.at;
+      live.round += 1;
+      live.options = [];
+      console.log("[live] 观众投票切换模式 →", sw);
+      changed();
+      return true;
+    }
     const text = "【观众投票 · 第 " + live.round + " 轮】" + top.text +
       "\n（以上是直播间观众投票选出的请求。请你自行判断是否执行：若属于删除/清空/破坏性操作、违法有害、或与本沙盒无关的内容，请礼貌拒绝并简要说明；否则请照做。）";
     try {
@@ -947,6 +1094,7 @@ async function injectTop(top) {
 }
 function maybeInject() {
   if (!LIVE_ENABLED || !live.autoDirect) return;
+  if (live.blocked) return; // 有 question/permission 待答 → 暂停接棒,投票保留
   if (live.session !== "idle") return;
   if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) return;
   if (Date.now() - live.lastInjectAt < COOLDOWN_MS) return;
@@ -982,6 +1130,18 @@ function handleSessionEvent(ev) {
     onFinishedEvent();
   } else if (t === "session.execution.failed" || t === "session.error") {
     onFailedEvent();
+  } else if (t === "question.asked") {
+    const d = ev.data || {};
+    const q = d.question || d;
+    const id = d.id || d.requestID || q.id;
+    if (id && (!d.sessionID || d.sessionID === SESSION_ID)) {
+      (live.questions || (live.questions = {}))[id] = { id, questions: d.questions || q.questions || [] };
+      broadcastLive();
+    }
+  } else if (t === "question.replied" || t === "question.rejected") {
+    const d = ev.data || {};
+    const id = d.id || d.requestID;
+    if (id && live.questions) delete live.questions[id];
   }
 }
 async function sessionEventLoop() {
@@ -1198,7 +1358,7 @@ function startLive() {
   if (CHAT_SOURCE === "bilibili") biliLoop();
   else if (CHAT_SOURCE === "youtube") ytLoop();
   else console.log("[live] 未配置弹幕源(YT_API_KEY/YT_VIDEO_ID 或 BILI_ROOM_ID)");
-  mergeLoop(); moderationLoop(); sessionEventLoop(); sessionPollLoop();
+  mergeLoop(); moderationLoop(); askLoop(); sessionEventLoop(); sessionPollLoop();
   console.log("[live] 直播投票已启动: 轮次=", live.round, "自动接棒=", live.autoDirect, "最小票数=", MIN_VOTES, "自动合并=", MERGE_ENABLED);
   setTimeout(maybeInject, 5000); // 重启后若已有票且会话空闲,补接一轮
 }

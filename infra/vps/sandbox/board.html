@@ -55,6 +55,8 @@
   .run .rs.failed { color: var(--warn); border-color: #7f1d1d; }
 
   footer { flex: 0 0 auto; display: flex; align-items: center; gap: 14px; color: var(--dim); font-size: 13px; flex-wrap: wrap; min-width: 0; }
+  #blocked { flex: 0 0 auto; display: none; align-items: center; gap: 10px; background: #3a2a0a; border: 1px solid #b45309; color: #fde68a; border-radius: 10px; padding: 8px 12px; font-size: 14px; }
+  #blocked.show { display: flex; }
   footer b { color: var(--fg); font-weight: 700; }
   footer .k { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; color: var(--fg); font-weight: 600; }
 
@@ -88,6 +90,8 @@
     <span class="pill" id="p-auto"><span class="dot"></span><span>自动接棒</span></span>
     <button id="gear" type="button" title="管理">⚙</button>
   </header>
+
+  <div id="blocked"></div>
 
   <div id="admin">
     <input id="token" type="password" placeholder="管理令牌 PLAYGROUND_ADMIN_TOKEN">
@@ -172,6 +176,9 @@
     }).join("");
 
     $("minvotes").textContent = st.minVotes > 0 ? ("本轮票王需 ≥ " + st.minVotes + " 票才会自动发送;发送后清零。") : "会话空闲即把当前票王发给沙盒;发送后清零。";
+    var bl = $("blocked");
+    if (st.blocked && st.blocked.title) { bl.textContent = "等待回答(" + (st.blocked.kind || "") + "):" + st.blocked.title + " · 接棒已暂停,投票保留"; bl.classList.add("show"); }
+    else { bl.classList.remove("show"); bl.textContent = ""; }
   }
 
   function load() {
