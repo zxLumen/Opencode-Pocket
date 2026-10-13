@@ -16,7 +16,8 @@ cp /srv/config-ro/AGENTS.md "$HOME/.config/opencode/AGENTS.md"
 # 额外把助手说明播种到工作区(项目级 AGENTS.md,双保险);两个种子都仅当缺失时写,
 # 不覆盖访客内容。/workspace 挂的是可写卷。
 [ -f /workspace/README.md ] || cp /srv/config-ro/README.md /workspace/README.md 2>/dev/null || true
-[ -f /workspace/AGENTS.md ] || cp /srv/config-ro/AGENTS.md /workspace/AGENTS.md 2>/dev/null || true
+# AGENTS.md 是我们自己的"助手说明"(非访客内容):每次强制刷新,避免工作区里留着旧版导致助手不知道新约定。
+cp /srv/config-ro/AGENTS.md /workspace/AGENTS.md 2>/dev/null || true
 # 联网搜索(websearch)是 opencode **自带的免费匿名能力**(见二进制里的 opencode.websearch.*:
 # exa/firecrawl/parallel/tavily/tinyfish),请求由 opencode 侧转发,不需要任何账号凭据 ——
 # 实测在「无任何集成」状态下依然可用。默认后端由 opencode.json 的 websearch.provider 指定。

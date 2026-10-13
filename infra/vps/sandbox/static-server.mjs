@@ -1572,6 +1572,7 @@ async function proposePlan() {
       (AUTO_WEB ? "【找灵感】可借鉴当下流行的玩法/交互。\n" : "") +
       "【连贯性,重要】" + focusLine + "\n" +
       "【观众视角,重要】观众只能看到预览的**一屏**,且不会自己操作。若你要做的事**不在『当前展示』那一页**,你必须用 before 的页面操作**把观众带过去**——像真观众一样:当前页上有通往目标的**入口/链接**就优先用 `click`(文字用页面上真实的入口文字),没有入口再用 `goto`。\n" +
+      "【观众不能操作网页,重要】观众只能看直播画面,**无法点击/拖动网页**。别做「必须观众动手才有反应」的东西;优先做**不用操作也能看**的(自动演示/自动走位/循环动画/可视化/AI自动对局/实时榜单/弹幕飘屏),或把交互接到**弹幕/投票**上(页面可读 `__audience.json` 与 `../__lb/state`)。\n" +
       "【页面操作(before/after,可选)】只支持这些**精确形状**:{\"type\":\"goto\",\"path\":\"页面文件名\"} 或 {\"type\":\"scroll\",\"dir\":\"up|down|top|bottom\"} 或 {\"type\":\"click\",\"text\":\"要点文字\"} 或 {\"type\":\"reload\"} 或 {\"type\":\"back\"};不需要就省略该字段。\n" +
       "只输出 JSON:{\"action\":\"improve|create\",\"page\":\"现有页面文件名(improve 时)\",\"title\":\"新东西名字(create 时)\",\"task\":\"一句话,具体可执行\",\"before\":{...},\"after\":{...}}。不要解释。";
     const r = await fetch(GATEWAY_URL + "/chat/completions", {
