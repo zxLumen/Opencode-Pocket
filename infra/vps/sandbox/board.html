@@ -43,6 +43,9 @@
   .opt .bar > i { display: block; height: 100%; background: linear-gradient(90deg, #2563eb, #60a5fa); border-radius: 4px; transition: width .35s ease; }
   .opt .votes { justify-self: end; min-width: 44px; text-align: right; font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .opt .votes small { font-size: 12px; color: var(--dim); font-weight: 600; }
+  .opt.sent { opacity: .45; }
+  .opt.sent .rank { background: #0e141c; color: var(--ok); }
+  .donehead { font-size: 12px; color: var(--dim); margin: 6px 2px 0; }
   .empty { color: var(--dim); padding: 18px 6px; font-size: 15px; }
   .guide { display: flex; flex-direction: column; gap: 8px; padding: 6px 4px; }
   .guide .gtitle { font-size: 18px; font-weight: 800; color: var(--fg); }
@@ -171,27 +174,35 @@
     pill("p-yt", st.chat.connected, chatLabel, st.chat.enabled && !!st.chat.error);
     pill("p-auto", st.autoDirect, st.autoDirect ? "自动接棒 开" : "自动接棒 关");
 
+    var act = (st.options || []).filter(function (o) { return !o.sent; });
+    var done = (st.options || []).filter(function (o) { return o.sent; });
     var max = 1;
-    for (var i = 0; i < st.options.length; i++) max = Math.max(max, st.options[i].votes);
-    var box = $("options");
-    if (!st.options.length) {
+    for (var i = 0; i < act.length; i++) max = Math.max(max, act[i].votes);
+    var box2 = $("options");
+    var out = "";
+    if (!act.length) {
       var ex = (st.guide && st.guide.examples) || [];
-      var gh = '<div class="guide"><div class="gtitle">发弹幕提想法,票最多的交给 AI 去做</div>'
+      out += '<div class="guide"><div class="gtitle">发弹幕提想法,票最多的交给 AI 去做</div>'
         + '<div class="gsub">发「#1」投票 · 发「往下」滚网页 · 相同意思会并票</div>';
-      if (ex.length) gh += '<div class="gex">试试:</div>' + ex.map(function (t) { return '<div class="gtip">「' + esc(t) + '」</div>'; }).join("");
-      gh += '</div>';
-      box.innerHTML = gh;
-    } else {
-      var top = st.options.slice(0, 12);
-      box.innerHTML = top.map(function (o, idx) {
-        var pct = Math.round((o.votes / max) * 100);
-        return '<div class="opt' + (idx === 0 ? " lead" : "") + '">' +
-          '<div class="rank">' + o.rank + '</div>' +
-          '<div class="body"><div class="text">' + esc(o.text) + '</div>' +
-          '<div class="bar"><i style="width:' + pct + '%"></i></div></div>' +
+      if (ex.length) out += '<div class="gex">试试:</div>' + ex.map(function (t) { return '<div class="gtip">「' + esc(t) + '」</div>'; }).join("");
+      out += '</div>';
+    }
+    out += act.slice(0, 12).map(function (o, idx) {
+      var pct = Math.round((o.votes / max) * 100);
+      return '<div class="opt' + (idx === 0 ? " lead" : "") + '">' +
+        '<div class="rank">' + o.rank + '</div>' +
+        '<div class="body"><div class="text">' + esc(o.text) + '</div>' +
+        '<div class="bar"><i style="width:' + pct + '%"></i></div></div>' +
+        '<div class="votes">' + o.votes + '<small> 票</small></div></div>';
+    }).join("");
+    if (done.length) {
+      out += '<div class="donehead">已执行</div>' + done.slice(0, 8).map(function (o) {
+        return '<div class="opt sent"><div class="rank">✓</div>' +
+          '<div class="body"><div class="text">' + esc(o.text) + '</div></div>' +
           '<div class="votes">' + o.votes + '<small> 票</small></div></div>';
       }).join("");
     }
+    box2.innerHTML = out;
 
     var ex = $("executed");
     if (!st.executed || !st.executed.length) ex.innerHTML = '<div class="empty">暂无</div>';

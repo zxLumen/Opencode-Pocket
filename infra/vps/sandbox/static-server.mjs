@@ -603,10 +603,11 @@ function saveLive() {
 // ---------- 状态广播(SSE) ----------
 const sseClients = new Set();
 function publicState() {
-  const options = [...live.options]
-    .sort((a, b) => b.votes - a.votes || a.createdAt - b.createdAt)
-    .map((o, i) => ({ rank: i + 1, id: o.id, text: o.text, votes: o.votes }));
-  const leader = options.length ? { text: options[0].text, votes: options[0].votes } : null;
+  const active = live.options.filter((o) => !o.sent).sort((a, b) => b.votes - a.votes || a.createdAt - b.createdAt);
+  const done = live.options.filter((o) => o.sent).sort((a, b) => (b.sentAt || 0) - (a.sentAt || 0));
+  const options = active.map((o, i) => ({ rank: i + 1, id: o.id, text: o.text, votes: o.votes, sent: false }))
+    .concat(done.map((o) => ({ rank: 0, id: o.id, text: o.text, votes: o.votes, sent: true })));
+  const leader = active.length ? { text: active[0].text, votes: active[0].votes } : null;
   return {
     round: live.round,
     autoDirect: live.autoDirect,
@@ -615,7 +616,8 @@ function publicState() {
     blocked: live.blocked,
     question: qvPublic(),
     site: live.site || null,
-    guide: (!live.options.length && !live.questionVote && live.guide) ? { examples: live.guide.examples } : null,
+    active: active.length,
+    guide: (!active.length && !live.questionVote && live.guide) ? { examples: live.guide.examples } : null,
     minVotes: MIN_VOTES,
     cooldownSec: Math.round(COOLDOWN_MS / 1000),
     maxRounds: MAX_ROUNDS,
@@ -687,13 +689,24 @@ function addOpinion(text, channelId) {
 function sortedOptions() {
   return [...live.options].sort((a, b) => b.votes - a.votes || a.createdAt - b.createdAt);
 }
+function activeOptions() {
+  return live.options.filter((o) => !o.sent).sort((a, b) => b.votes - a.votes || a.createdAt - b.createdAt);
+}
+function trimOptions() {
+  if (live.options.length <= 30) return;
+  const done = live.options.filter((o) => o.sent).sort((a, b) => (a.sentAt || 0) - (b.sentAt || 0));
+  while (live.options.length > 30 && done.length) {
+    const drop = done.shift();
+    live.options = live.options.filter((o) => o !== drop);
+  }
+}
 function handleChat(text, channelId) {
   const t = String(text || "").trim();
   if (!t) return;
   if (live.questionVote) { qvVote(t, channelId || "anon:" + Math.random().toString(36).slice(2, 8)); return; }
   const n = parsePick(t);
   if (n) {
-    const opt = sortedOptions()[n - 1];
+    const opt = activeOptions()[n - 1];
     if (opt) vote(opt, channelId);
     return;
   }
@@ -1193,7 +1206,7 @@ async function siteTick() {
   live.site = { seq: (live.siteSeq = (live.siteSeq || 0) + 1), ...cmd };
   live.executed.push({ round: live.round, text: top.text, votes: top.votes, at: Date.now(), status: "done" });
   if (live.executed.length > 200) live.executed = live.executed.slice(-200);
-  live.options = live.options.filter((o) => o.kind !== "site"); // 清掉本轮网站操作
+  top.sent = true; top.sentAt = Date.now(); trimOptions(); // 保留置灰,不清空
   live.siteFirstAt = null;
   console.log("[live] 网站操作执行:", top.text, JSON.stringify(cmd));
   changed();
@@ -1227,7 +1240,7 @@ async function genGuide() {
 async function guideLoop() {
   if (!GUIDE_ENABLED) return;
   for (;;) {
-    try { if (!live.options.length && !live.questionVote && (!live.guide || Date.now() - live.guide.at > GUIDE_INTERVAL_MS)) await genGuide(); } catch {}
+    try { if (!live.options.some((o) => !o.sent) && !live.questionVote && (!live.guide || Date.now() - live.guide.at > GUIDE_INTERVAL_MS)) await genGuide(); } catch {}
     await sleep(GUIDE_INTERVAL_MS);
   }
 }
@@ -1285,7 +1298,7 @@ async function askLoop() {
   }
 }
 function topOption() {
-  const s = sortedOptions();
+  const s = activeOptions().filter((o) => (o.kind || "opinion") !== "site");
   return s.length ? s[0] : null;
 }
 function finishRun(kind) {
@@ -1333,7 +1346,7 @@ async function injectTop(top) {
       live.agent = sw;
       live.lastSentText = null; // 切模式后,同一句再投不再判重
       live.round += 1;
-      live.options = [];
+      top.sent = true; top.sentAt = e2.at; trimOptions(); // 保留置灰,不清空
       console.log("[live] 观众投票切换模式 →", sw);
       changed();
       return true;
@@ -1358,7 +1371,7 @@ async function injectTop(top) {
   live.lastInjectAt = entry.at;
   live.session = "running";
   live.round += 1;
-  live.options = []; // 发送后清零重来
+  top.sent = true; top.sentAt = entry.at; trimOptions(); // 保留置灰,不清空
   console.log("[live] 已注入第", entry.round, "轮:", top.text);
   changed();
   return true;
@@ -1369,7 +1382,7 @@ function maybeInject() {
   if (live.session !== "idle") return;
   if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) return;
   if (Date.now() - live.lastInjectAt < COOLDOWN_MS) return;
-  const list = sortedOptions().filter((o) => o.votes >= MIN_VOTES && (o.kind || "opinion") !== "site");
+  const list = sortedOptions().filter((o) => !o.sent && o.votes >= MIN_VOTES && (o.kind || "opinion") !== "site");
   if (!list.length) return;
   // 顺延:优先取票数最高、且不是「上一条刚发过」的那条;若全都相同则兜底照发票王(绝不卡死)
   let top = list.find((o) => o.text !== live.lastSentText);
