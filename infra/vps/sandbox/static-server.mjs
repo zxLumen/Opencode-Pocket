@@ -557,6 +557,7 @@ let live = {
   lastInjectAt: 0,
   currentRun: null,
   session: "unknown",
+  agent: null, // 当前 agent 模式(plan/build),由事件/我方代切维护
   blocked: null, // { kind: question|permission|form, title }
   questions: {}, // SSE 收集的待答问题 id -> {id, questions}
   chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, loggedIn: Boolean(BILI_SESSDATA), chatId: null, videoId: YT_VIDEO_ID || null, detail: CHAT_SOURCE === "bilibili" ? (BILI_ROOM_ID || null) : (YT_VIDEO_ID || null), lastAt: 0, error: null },
@@ -605,6 +606,7 @@ function publicState() {
     round: live.round,
     autoDirect: live.autoDirect,
     session: live.session,
+    agent: live.agent,
     blocked: live.blocked,
     minVotes: MIN_VOTES,
     cooldownSec: Math.round(COOLDOWN_MS / 1000),
@@ -1040,6 +1042,18 @@ function finishRun(kind) {
   const e = live.currentRun;
   if (e && e.status === "running") { e.status = kind; live.currentRun = null; changed(); }
 }
+// 明确的工作指令:注入前强制 build(保证执行,避免被切到 plan 后白跑)
+async function ensureBuild() {
+  if (live.agent === "build") return;
+  try {
+    const r = await upstreamFetch("/api/session/" + encodeURIComponent(SESSION_ID) + "/agent", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent: "build" }),
+    });
+    if (r.ok) { live.agent = "build"; console.log("[live] 工作指令 → 强制 build"); }
+  } catch {}
+}
 async function injectTop(top) {
   if (live.injecting) return false;
   if (MODERATE && isRisky(top.text)) { // 仅在开启审核时兜底;默认交给模型判断
@@ -1062,6 +1076,8 @@ async function injectTop(top) {
       live.executed.push(e2);
       if (live.executed.length > 200) live.executed = live.executed.slice(-200);
       live.lastInjectAt = e2.at;
+      live.agent = sw;
+      live.lastSentText = null; // 切模式后,同一句再投不再判重
       live.round += 1;
       live.options = [];
       console.log("[live] 观众投票切换模式 →", sw);
@@ -1070,6 +1086,7 @@ async function injectTop(top) {
     }
     const text = "【观众投票 · 第 " + live.round + " 轮】" + top.text +
       "\n（以上是直播间观众投票选出的请求。请你自行判断是否执行：若属于删除/清空/破坏性操作、违法有害、或与本沙盒无关的内容，请礼貌拒绝并简要说明；否则请照做。）";
+    await ensureBuild(); // 明确的工作指令 → 强制 build 再发
     try {
       const r = await upstreamFetch("/api/session/" + encodeURIComponent(SESSION_ID) + "/prompt", {
         method: "POST",
@@ -1098,9 +1115,11 @@ function maybeInject() {
   if (live.session !== "idle") return;
   if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) return;
   if (Date.now() - live.lastInjectAt < COOLDOWN_MS) return;
-  const top = topOption();
-  if (!top || top.votes < MIN_VOTES) return;
-  if (top.text === live.lastSentText) return;
+  const list = sortedOptions().filter((o) => o.votes >= MIN_VOTES);
+  if (!list.length) return;
+  // 顺延:优先取票数最高、且不是「上一条刚发过」的那条;若全都相同则兜底照发票王(绝不卡死)
+  let top = list.find((o) => o.text !== live.lastSentText);
+  if (!top) top = list[0];
   injectTop(top);
 }
 let finishedTimer = null;
@@ -1142,6 +1161,14 @@ function handleSessionEvent(ev) {
     const d = ev.data || {};
     const id = d.id || d.requestID;
     if (id && live.questions) delete live.questions[id];
+  } else if (t === "agent-switched") {
+    const d = ev.data || {};
+    const a = d.agent || ev.agent;
+    if (a && (!d.sessionID || d.sessionID === SESSION_ID)) {
+      live.agent = a;
+      live.lastSentText = null; // 切模式后,同一句再投不再判重
+      broadcastLive();
+    }
   }
 }
 async function sessionEventLoop() {
