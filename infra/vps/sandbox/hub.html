@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>访客沙盒 · 工作台</title>
 <style>
-  :root { --split: 42%; --split-v: 55%; --bar: 10px; --board-w: 360px; }
+  :root { --split: 42%; --split-v: 55%; --bar: 10px; --board-w: clamp(220px, 26vw, 380px); }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
   body {
@@ -19,7 +19,7 @@
   #pane-session { flex: 0 0 var(--split); }
   body.stacked #pane-session { flex: 0 0 var(--split-v); }
   #pane-site { flex: 1 1 auto; }
-  #pane-board { flex: 0 0 var(--board-w); border-left: 1px solid #e4e4e7; }
+  #pane-board { flex: 0 1 var(--board-w); min-width: 0; border-left: 1px solid #e4e4e7; }
   body.stacked #pane-board { flex: 0 0 32%; border-left: 0; border-top: 1px solid #e4e4e7; }
   body.no-board #pane-board { display: none; }
 

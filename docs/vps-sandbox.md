@@ -326,21 +326,15 @@ Xvfb(虚拟屏 1280x720)
 - **历史消息不参与**：首次连接只记游标，不把开播前的聊天当投票。
 - **合并**：先做文本规范化精确去重（完全相同直接并票）；再每 30s 调一次博客 AI 网关做
   语义合并（意思相近的并成一条、票数相加，保留票数最高那句）。
-- **弹幕审核**（`PLAYGROUND_MODERATE`，默认开，`both`）：
-  1. **规则硬拦**（本地、确定性）：纯表情/符号、链接、`@`、刷屏重复、纯数字、屏蔽词
-     `PLAYGROUND_BLOCKLIST`，以及**破坏性/危险模式**（`rm -rf`、格式化、删库、提权、`curl|sh`、
-     「删除/清空 + 全部/工作区/文件」等）。
-  2. **AI 判意图**（博客 AI 网关）：只有「对沙盒的安全、建设性指令 `instruction`」进投票；
-     `risky`（破坏性/危险）、`chitchat`/`comment`（闲聊/吐槽/问「你是谁」）、`unsafe`（有害）、
-     `injection`（提示注入）一律丢弃。
-  - 同文本判定**缓存**、每 2s **批量**；审核失败默认**放行**（`PLAYGROUND_MODERATE_FAIL=open`），
-    但规则硬拦始终生效。
-  - **纵深防御**：注入会话前（`injectTop`）再跑一次危险判定，命中即丢弃、不发送。
-  - 沙盒 `seed/AGENTS.md` 也要求助手**拒绝破坏性请求**。
+- **弹幕侧审核默认关闭**（`PLAYGROUND_MODERATE=0`）：所有弹幕（除纯符号/表情）都进投票；
+  **是否执行交由模型判断**——注入时提示词明确「请你自行判断是否执行；破坏性/违法/无关内容请拒绝」，
+  且沙盒 `seed/AGENTS.md` 要求助手**拒绝破坏性请求**。
+  - 如需在弹幕侧过滤，设 `PLAYGROUND_MODERATE=1`：规则（表情/链接/`@`/刷屏/纯数字/屏蔽词/危险模式）
+    + AI 判意图（只放行 `instruction`；`risky`/`chitchat`/`comment`/`unsafe`/`injection` 丢弃）。
 - **自动接棒**：监听 `session.idle` / `session.execution.succeeded`（另有 `/api/session/active`
   轮询兜底）→ **只要会话空闲**就把当前票王 `POST /api/session/<id>/prompt` 注入
-  `【观众投票 · 第 N 轮】<意见>` → 清零。默认**不设票数门槛、无冷却**（`PLAYGROUND_MIN_VOTES=0`、
-  `PLAYGROUND_COOLDOWN_SEC=0`）。失败只标记、不自动接棒。
+  `【观众投票 · 第 N 轮】<意见>`（并附一句「请你自行判断是否执行；破坏性/违法/无关内容请拒绝」）→ 清零。
+  默认**不设票数门槛、无冷却**（`PLAYGROUND_MIN_VOTES=0`、`PLAYGROUND_COOLDOWN_SEC=0`）。失败只标记、不自动接棒。
 - **护栏**：最大轮数（`PLAYGROUND_MAX_ROUNDS`，防无限烧预算）、自动接棒总开关（榜单页右上「⚙」）。
 - **状态持久化**：`/home/opencode/.local/state/sandbox/live.json`（家目录卷，部署/重启不丢）。
 

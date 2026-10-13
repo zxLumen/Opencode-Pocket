@@ -16,45 +16,45 @@
     font: 15px/1.45 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
     color: var(--fg); background: var(--bg); overflow: hidden;
   }
-  #app { display: flex; flex-direction: column; height: 100dvh; padding: 14px 16px; gap: 12px; }
+  #app { display: flex; flex-direction: column; height: 100dvh; padding: 14px 16px; gap: 12px; min-width: 0; overflow: hidden; }
 
-  header { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  header { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
   header h1 { font-size: 22px; font-weight: 800; letter-spacing: .5px; }
   header .round { font-size: 14px; color: var(--dim); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 3px 12px; }
   header .spacer { flex: 1 1 auto; }
-  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dim); background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 3px 11px; white-space: nowrap; max-width: 100%; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
   .dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
   .dot.bad { background: var(--warn); }
   .pill.on { color: var(--fg); }
 
-  main { flex: 1 1 auto; min-height: 0; display: grid; grid-template-rows: 1.55fr 1fr; gap: 12px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; display: flex; flex-direction: column; min-height: 0; }
+  main { flex: 1 1 auto; min-height: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 1.55fr 1fr; gap: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
   .card > h2 { flex: 0 0 auto; font-size: 14px; font-weight: 700; color: var(--dim); padding: 12px 16px 8px; text-transform: none; }
 
-  .list { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
-  .opt { display: flex; align-items: center; gap: 12px; background: var(--card2); border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; }
+  .list { flex: 1 1 auto; min-height: 0; min-width: 0; overflow-y: auto; padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .opt { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; background: var(--card2); border: 1px solid var(--line); border-radius: 11px; padding: 10px 12px; min-width: 0; }
   .opt.lead { border-color: var(--lead); box-shadow: 0 0 0 1px var(--lead) inset; }
-  .opt .rank { flex: 0 0 auto; width: 34px; height: 34px; border-radius: 9px; background: #0e141c; color: var(--dim); display: grid; place-items: center; font-weight: 800; font-size: 16px; }
+  .opt .rank { width: 34px; height: 34px; border-radius: 9px; background: #0e141c; color: var(--dim); display: grid; place-items: center; font-weight: 800; font-size: 16px; }
   .opt.lead .rank { background: var(--lead); color: #1a1205; }
-  .opt .body { flex: 1 1 auto; min-width: 0; }
-  .opt .text { font-size: 18px; font-weight: 600; word-break: break-word; }
+  .opt .body { min-width: 0; }
+  .opt .text { font-size: 18px; font-weight: 600; overflow-wrap: anywhere; word-break: break-word; }
   .opt .bar { height: 6px; border-radius: 4px; background: #0e141c; margin-top: 7px; overflow: hidden; }
   .opt .bar > i { display: block; height: 100%; background: linear-gradient(90deg, #2563eb, #60a5fa); border-radius: 4px; transition: width .35s ease; }
-  .opt .votes { flex: 0 0 auto; min-width: 54px; text-align: right; font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .opt .votes { justify-self: end; min-width: 44px; text-align: right; font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .opt .votes small { font-size: 12px; color: var(--dim); font-weight: 600; }
   .empty { color: var(--dim); padding: 18px 6px; font-size: 15px; }
 
-  .exec { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
-  .run { display: flex; align-items: center; gap: 10px; background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
-  .run .rn { flex: 0 0 auto; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
-  .run .rt { flex: 1 1 auto; min-width: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .run .rs { flex: 0 0 auto; font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .exec { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; min-width: 0; }
+  .run { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; min-width: 0; }
+  .run .rn { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .run .rt { min-width: 0; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run .rs { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
   .run .rs.running { color: #fbbf24; border-color: #78350f; }
   .run .rs.done { color: var(--ok); border-color: #14532d; }
   .run .rs.failed { color: var(--warn); border-color: #7f1d1d; }
 
-  footer { flex: 0 0 auto; display: flex; align-items: center; gap: 14px; color: var(--dim); font-size: 13px; flex-wrap: wrap; }
+  footer { flex: 0 0 auto; display: flex; align-items: center; gap: 14px; color: var(--dim); font-size: 13px; flex-wrap: wrap; min-width: 0; }
   footer b { color: var(--fg); font-weight: 700; }
   footer .k { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; color: var(--fg); font-weight: 600; }
 

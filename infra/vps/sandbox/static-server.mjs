@@ -458,7 +458,7 @@ const MIN_VOTES = Number(process.env.PLAYGROUND_MIN_VOTES || 0); // 默认 0 = �
 const COOLDOWN_MS = Number(process.env.PLAYGROUND_COOLDOWN_SEC || 0) * 1000; // 默认 0 = 无冷却
 const MAX_ROUNDS = Number(process.env.PLAYGROUND_MAX_ROUNDS || 0); // 0 = 不限
 // 弹幕审核:规则 + AI 意图/风控;只有「给沙盒的明确指令」才进投票
-const MODERATE = process.env.PLAYGROUND_MODERATE !== "0";
+const MODERATE = process.env.PLAYGROUND_MODERATE === "1"; // 默认关闭:弹幕侧不过滤,交给模型判断
 const MODERATE_MODE = String(process.env.PLAYGROUND_MODERATE_MODE || "both").toLowerCase(); // both|rules|llm|off
 const MODERATE_FAIL_OPEN = process.env.PLAYGROUND_MODERATE_FAIL !== "closed"; // 审核失败时:true=放行
 const MODERATE_MIN_LEN = Number(process.env.PLAYGROUND_MODERATE_MIN_LEN || 2);
@@ -646,8 +646,10 @@ function enqueueOpinion(text, channelId) {
   if (!text) return;
   if (text.length > MAX_OPINION_LEN) text = text.slice(0, MAX_OPINION_LEN);
   const norm = normText(text);
+  if (!norm) return; // 纯符号/表情,无法作为意见
+  if (!MODERATE || MODERATE_MODE === "off") return addOpinion(text, channelId); // 弹幕侧不过滤
   if (!ruleFilter(text, norm)) return; // 规则拦截 → 不进投票
-  if (!MODERATE || MODERATE_MODE === "off" || MODERATE_MODE === "rules") return addOpinion(text, channelId);
+  if (MODERATE_MODE === "rules") return addOpinion(text, channelId);
   const hit = moderationCache.get(norm);
   if (hit) { if (hit.label === "instruction") addOpinion(text, channelId); return; }
   modQueue.push({ text, channelId, norm });
@@ -853,7 +855,7 @@ function finishRun(kind) {
 }
 async function injectTop(top) {
   if (live.injecting) return false;
-  if (isRisky(top.text)) { // 纵深防御:即使混进票榜,发送前再拦一次
+  if (MODERATE && isRisky(top.text)) { // 仅在开启审核时兜底;默认交给模型判断
     live.options = live.options.filter((o) => o !== top);
     console.warn("[live] 拦截危险指令,不发送:", top.text);
     changed();
@@ -861,7 +863,8 @@ async function injectTop(top) {
   }
   live.injecting = true;
   try {
-    const text = "【观众投票 · 第 " + live.round + " 轮】" + top.text;
+    const text = "【观众投票 · 第 " + live.round + " 轮】" + top.text +
+      "\n（以上是直播间观众投票选出的请求。请你自行判断是否执行：若属于删除/清空/破坏性操作、违法有害、或与本沙盒无关的内容，请礼貌拒绝并简要说明；否则请照做。）";
     try {
       const r = await upstreamFetch("/api/session/" + encodeURIComponent(SESSION_ID) + "/prompt", {
         method: "POST",
