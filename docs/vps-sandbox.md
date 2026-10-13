@@ -353,10 +353,12 @@ Xvfb(虚拟屏 1280x720)
   `【观众投票 · 第 N 轮】<意见>`（并附一句「请你自行判断是否执行；破坏性/违法/无关内容请拒绝」）→ 清零。
   默认**不设票数门槛、无冷却**（`PLAYGROUND_MIN_VOTES=0`、`PLAYGROUND_COOLDOWN_SEC=0`）。失败只标记、不自动接棒。
 - **护栏**：最大轮数（`PLAYGROUND_MAX_ROUNDS`，防无限烧预算）、自动接棒总开关（榜单页右上「⚙」）。
-- **阻塞处理（question / permission / form）**：agent 提问或申请权限时**暂停接棒**（不注入、不拿投票答题，
-  投票保留为「下一轮任务」），榜单显示「等待回答」。默认**网关代答**（`PLAYGROUND_QUESTION_POLICY=auto`）；
-  权限申请默认**拒绝**（`PLAYGROUND_PERMISSION_POLICY=reject`，避免读到 `.env` 等敏感文件）。
-  设 `PLAYGROUND_QUESTION_POLICY=pause` 则只暂停、由主播在沙盒里人工回答。
+- **阻塞处理（question / permission / form）**：agent 提问或申请权限时**暂停意见接棒**（不注入、不拿意见投票答题，
+  意见池数据保留）。**question 默认改为「逐题弹幕投票」**（`PLAYGROUND_QUESTION_POLICY=vote`）：
+  会话级 form 的每题各开一轮，观众发 `#序号`/选项文字投票，**未匹配的作为自由文本候选**；
+  自该题**首条弹幕起** `PLAYGROUND_QUESTION_VOTE_SEC`（默认 20s）后用**票首**作答，答完进入下一题，
+  全部答完一次性提交 `POST /api/session/<id>/form/<id>/reply`，随后**恢复意见投票**。无人投则一直等。
+  另可 `auto`（网关代答）或 `pause`（只暂停人工答）。权限申请默认 `reject`。
 - **状态持久化**：`/home/opencode/.local/state/sandbox/live.json`（家目录卷，部署/重启不丢）。
 
 **端点**（辅助服务；Caddy 已放行 `^/__lb/` 与 `GET /board`）：

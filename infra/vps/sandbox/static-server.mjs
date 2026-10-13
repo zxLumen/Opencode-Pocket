@@ -560,6 +560,7 @@ let live = {
   agent: null, // 当前 agent 模式(plan/build),由事件/我方代切维护
   blocked: null, // { kind: question|permission|form, title }
   questions: {}, // SSE 收集的待答问题 id -> {id, questions}
+  questionVote: null, // 问题投票状态机(逐题)
   chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, loggedIn: Boolean(BILI_SESSDATA), chatId: null, videoId: YT_VIDEO_ID || null, detail: CHAT_SOURCE === "bilibili" ? (BILI_ROOM_ID || null) : (YT_VIDEO_ID || null), lastAt: 0, error: null },
 };
 
@@ -608,6 +609,7 @@ function publicState() {
     session: live.session,
     agent: live.agent,
     blocked: live.blocked,
+    question: qvPublic(),
     minVotes: MIN_VOTES,
     cooldownSec: Math.round(COOLDOWN_MS / 1000),
     maxRounds: MAX_ROUNDS,
@@ -667,6 +669,7 @@ function sortedOptions() {
 function handleChat(text, channelId) {
   const t = String(text || "").trim();
   if (!t) return;
+  if (live.questionVote) { qvVote(t, channelId || "anon:" + Math.random().toString(36).slice(2, 8)); return; }
   const m = t.match(/^#?(\d{1,2})$/) || t.match(/^\+(\d{1,2})$/) || t.match(/^(?:投票|vote)\s*#?(\d{1,2})$/i);
   if (m) {
     const opt = sortedOptions()[Number(m[1]) - 1];
@@ -935,7 +938,8 @@ async function detectSwitch(text) {
 }
 // ---------- 阻塞(question/permission/form)处理:暂停接棒 + 网关代答 ----------
 // 观众投票是「下一轮想让模型做的事」,不是 question 的答案 → 阻塞期间不注入、不拿投票答题。
-const QUESTION_POLICY = String(process.env.PLAYGROUND_QUESTION_POLICY || "auto").toLowerCase(); // auto|pause
+const QUESTION_POLICY = String(process.env.PLAYGROUND_QUESTION_POLICY || "vote").toLowerCase(); // vote|auto|pause
+const QUESTION_VOTE_MS = Number(process.env.PLAYGROUND_QUESTION_VOTE_SEC || 20) * 1000; // 问题投票时长(自该题首条弹幕起)
 const PERMISSION_POLICY = String(process.env.PLAYGROUND_PERMISSION_POLICY || "reject").toLowerCase(); // reject|once|always
 async function upJSON(path) {
   const r = await upstreamFetch(path);
@@ -1007,6 +1011,83 @@ async function answerForm(id, fields) {
   });
   return answer;
 }
+// ---------- 问题投票(question 工具生成的会话级 form;逐题投票,票首作答) ----------
+function qvStart(form) {
+  const fields = (form.fields || []).map((f) => ({
+    key: f.key,
+    title: f.title || f.description || f.key,
+    options: (f.options || []).map((o) => ({
+      value: String(o && o.value != null ? o.value : (o && o.label) || ""),
+      label: String((o && (o.label != null ? o.label : o.value)) || ""),
+    })),
+    custom: f.custom !== false,
+  }));
+  live.questionVote = { formId: form.id, title: form.title || "提问", fields, index: 0, answers: {}, cur: { tally: {}, voters: {}, firstVoteAt: null } };
+  live.blocked = { kind: "question", title: form.title || "提问" };
+  console.log("[live] 开始问题投票:", form.title || "", "题数", fields.length);
+  changed();
+}
+function qvVote(text, uid) {
+  const qv = live.questionVote; if (!qv) return false;
+  const f = qv.fields[qv.index]; if (!f) return false;
+  const raw = String(text || "").trim(); if (!raw) return false;
+  const cur = qv.cur;
+  if (!cur.firstVoteAt) cur.firstVoteAt = Date.now();
+  const norm = normText(raw);
+  let key = null;
+  const m = raw.match(/^#?(\d{1,2})$/);
+  if (m) { const o = f.options[Number(m[1]) - 1]; if (o) key = o.value; }
+  if (!key) for (const o of f.options) { const on = normText(o.label || o.value); if (on && (norm === on || norm.indexOf(on) >= 0)) { key = o.value; break; } }
+  if (!key) { if (!f.custom && f.options.length) return false; key = raw; } // 未匹配 → 自定义输入(自由文本候选)
+  if (!cur.voters[key]) cur.voters[key] = [];
+  if (cur.voters[key].indexOf(uid) >= 0) return false;
+  cur.voters[key].push(uid);
+  cur.tally[key] = (cur.tally[key] || 0) + 1;
+  changed();
+  return true;
+}
+function qvPublic() {
+  const qv = live.questionVote; if (!qv) return null;
+  const f = qv.fields[qv.index] || null;
+  const optVals = f ? f.options.map((o) => o.value) : [];
+  const free = f ? Object.keys(qv.cur.tally).filter((k) => optVals.indexOf(k) < 0).map((k) => ({ text: k, votes: qv.cur.tally[k] })) : [];
+  return {
+    title: qv.title, index: qv.index, total: qv.fields.length,
+    current: f ? {
+      title: f.title,
+      options: f.options.map((o, i) => ({ n: i + 1, label: o.label, votes: qv.cur.tally[o.value] || 0 })),
+      free, custom: f.custom,
+      deadline: qv.cur.firstVoteAt ? qv.cur.firstVoteAt + QUESTION_VOTE_MS : null,
+      started: !!qv.cur.firstVoteAt,
+    } : null,
+    fields: qv.fields.map((x, i) => ({ title: x.title, done: i < qv.index, current: i === qv.index })),
+    answers: qv.answers,
+  };
+}
+async function qvTick() {
+  const qv = live.questionVote; if (!qv) return;
+  const cur = qv.cur;
+  if (!cur.firstVoteAt) return; // 等人投
+  if (Date.now() - cur.firstVoteAt < QUESTION_VOTE_MS) return;
+  const f = qv.fields[qv.index];
+  let topKey = null, topN = 0;
+  for (const k of Object.keys(cur.tally)) if (cur.tally[k] > topN) { topN = cur.tally[k]; topKey = k; }
+  if (f && topKey != null) { qv.answers[f.key] = topKey; console.log("[live] 问题投票作答:", f.title, "→", topKey, "(" + topN + "票)"); }
+  qv.index += 1;
+  cur.tally = {}; cur.voters = {}; cur.firstVoteAt = null;
+  if (qv.index < qv.fields.length) { console.log("[live] 进入下一题:", qv.fields[qv.index].title); changed(); return; }
+  try {
+    await upstreamFetch("/api/session/" + encodeURIComponent(SESSION_ID) + "/form/" + encodeURIComponent(qv.formId) + "/reply", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ answer: qv.answers }),
+    });
+    console.log("[live] 问题投票完成,已提交:", JSON.stringify(qv.answers));
+  } catch (e) { console.error("[live] 问题提交失败:", (e && e.message) || e); }
+  live.questionVote = null;
+  live.blocked = null;
+  changed();
+}
+async function qvLoop() { for (;;) { await sleep(1000); try { await qvTick(); } catch {} } }
+
 let askBusy = false;
 async function askLoop() {
   for (;;) {
@@ -1033,9 +1114,17 @@ async function askLoop() {
       } catch {}
       try { // 会话级 form:question 工具走这里(GET /api/session/<id>/form)
         const sf = await upJSON("/api/session/" + encodeURIComponent(SESSION_ID) + "/form");
-        for (const it of ((sf && sf.data) || [])) {
-          if (QUESTION_POLICY !== "pause") { await answerForm(it.id, it.fields); console.log("[live] 代答 form(会话级):", it.title || ""); }
-          else blocked = { kind: "form", title: it.title || "表单" };
+        const items = (sf && sf.data) || [];
+        if (QUESTION_POLICY === "vote") {
+          const active = items[0];
+          if (active) {
+            if (!live.questionVote || live.questionVote.formId !== active.id) qvStart(active);
+            blocked = { kind: "question", title: active.title || "提问" };
+          } else if (live.questionVote) { live.questionVote = null; console.log("[live] 问题已消失,结束问题投票"); }
+        } else if (QUESTION_POLICY !== "pause") {
+          for (const it of items) { await answerForm(it.id, it.fields); console.log("[live] 代答 form(会话级):", it.title || ""); }
+        } else {
+          for (const it of items) blocked = { kind: "form", title: it.title || "表单" };
         }
       } catch {}
       for (const id of Object.keys(live.questions || {})) { // question(SSE 收集)
@@ -1406,7 +1495,7 @@ function startLive() {
   if (CHAT_SOURCE === "bilibili") biliLoop();
   else if (CHAT_SOURCE === "youtube") ytLoop();
   else console.log("[live] 未配置弹幕源(YT_API_KEY/YT_VIDEO_ID 或 BILI_ROOM_ID)");
-  mergeLoop(); moderationLoop(); askLoop(); sessionEventLoop(); sessionPollLoop();
+  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); sessionEventLoop(); sessionPollLoop();
   console.log("[live] 直播投票已启动: 轮次=", live.round, "自动接棒=", live.autoDirect, "最小票数=", MIN_VOTES, "自动合并=", MERGE_ENABLED);
   setTimeout(maybeInject, 5000); // 重启后若已有票且会话空闲,补接一轮
 }
@@ -1453,7 +1542,7 @@ async function handleAdmin(req, res) {
   else if (action === "pause") live.autoDirect = false;
   else if (action === "reset") live.options = [];
   else if (action === "clear-executed") live.executed = [];
-  else if (action === "add") addOpinion(String(body.text || ""), "admin");
+  else if (action === "add") handleChat(String(body.text || ""), "admin");
   else if (action === "send") { const t = topOption(); if (t) await injectTop(t); }
   else return json(res, { ok: false, error: "unknown action" });
   changed();
