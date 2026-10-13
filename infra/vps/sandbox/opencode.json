@@ -3,6 +3,9 @@
   "model": "zxgw/gateway-default",
   "small_model": "zxgw/gateway-default",
   "share": "disabled",
+  "websearch": {
+    "provider": "exa"
+  },
   "provider": {
     "zxgw": {
       "npm": "@ai-sdk/openai-compatible",
