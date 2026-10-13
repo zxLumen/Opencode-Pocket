@@ -95,13 +95,13 @@ docker_play 内网 ──► opencode-play 容器（opencode serve :4096，同�
 | 边缘 Caddy | 承载全部访客锁定逻辑（见 `infra/vps/sandbox/Caddyfile`）；不发布端口，由博客栈的 Caddy 转发进来。 |
 | 配置 | `opencode.json` 烤进镜像只读区，每次启动由 `entrypoint.sh` 覆盖回家目录；访客改配置只影响当次进程，重启即还原。 |
 | 网络 | `docker_play`（external，博客栈创建）：只挂 `app`（AI 网关）+ 博客 `caddy`（反代）+ 本栈服务；不接 `web`。 |
-| 存储 | `docker_playground-data`（`/workspace`，访客共享）、`docker_playground-home`（会话/状态卷）。均为 external，**不随部署清掉**；要清空需手动删卷。 |
+| 存储 | 沙盒数据在**5G loopback ext4 盘**（`/srv/sandbox-5g`，镜像 `playground-5g.img`）：`workspace/`→`/workspace`、`home/`→家目录，**硬限 5G**、宿主其它目录不可达。开机由 `/etc/fstab`（`loop,nofail`）挂载，`deploy.sh` 兜底自愈。旧卷 `docker_playground-*` 保留作冷备份。 |
 
 ### 与博客栈刻意保留的两处共享（搬不走）
 
 - **网络 `docker_play`**：沙盒要访问博客 AI 网关（`app:3000/api/ai/v1`）；博客 Caddy 要访问
   本栈的 `sandbox-caddy`。
-- **卷 `docker_playground-*`**：跨栈复用，里面是访客会话与工作区数据。
+- **卷 `docker_playground-*`**：旧数据卷，现仅作**冷备份**（沙盒已改用 5G loopback 盘 `playground-5g.img` / `/srv/sandbox-5g`，见上表）。
 
 > 因此两端都用 `external: true` + 显式 `name:` 引用这两个资源；博客栈的 compose 不再持有
 > 沙盒服务，也就不会在 `down -v` 时误删这些卷。
@@ -367,11 +367,11 @@ Xvfb(虚拟屏 1280x720)
   `【观众投票 · 第 N 轮】<意见>（支持：观众名…）`（并附一句「请你自行判断是否执行；破坏性/违法/无关内容请拒绝」）→
   **执行后从票池移除该条（其余票保留）**，导演只挑未执行的票王。
   默认**不设票数门槛、无冷却**（`PLAYGROUND_MIN_VOTES=0`、`PLAYGROUND_COOLDOWN_SEC=0`）。失败只标记、不自动接棒。
-- **卡死兜底（重要）**：opencode 偶尔会「run 其实已死/被中断，但仍一直报 `running`」（SSE 断流、
-  僵死 tool 状态等），此时 `session.idle` 永不到来 → 后续票王永不接棒（实测踩过 40+ 分钟）。
-  对策：`running` 且超过 `PLAYGROUND_STUCK_SEC`（默认 **360s**）**无任何会话事件**时，自动
-  `POST /api/session/<id>/interrupt` 清掉僵死 run、标记该轮为「已中断」并立即接下一棒。
-  榜单页也会显示当前轮「已耗时 Xm」，管理面板另有「**强制接棒**」按钮可手动触发同一动作。
+- **卡死兜底（仅手动，无自动中断）**：极少数情况下 opencode 会「run 其实已死/被中断，但仍一直报
+  `running`」（SSE 断流、僵死 tool 状态等），此时 `session.idle` 不到来、后续票王会一直等。
+  **这里不做任何按时间的自动中断**（命令想跑多久跑多久）。需要时由榜单页管理面板的
+  「**强制接棒**」按钮手动触发：`POST /api/session/<id>/interrupt` 清掉僵死 run 并立即接下一棒。
+  榜单页同时显示当前轮「已耗时 Xm」。
 - **护栏**：最大轮数（`PLAYGROUND_MAX_ROUNDS`，防无限烧预算）、自动接棒总开关（榜单页右上「⚙」）。
 - **阻塞处理（question / permission / form）**：agent 提问或申请权限时**暂停意见接棒**（不注入、不拿意见投票答题，
   意见池数据保留）。**question 默认改为「逐题弹幕投票」**（`PLAYGROUND_QUESTION_POLICY=vote`）：
