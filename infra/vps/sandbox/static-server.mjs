@@ -1380,11 +1380,21 @@ async function genGuide() {
     if (!r.ok) return;
     const d = await r.json();
     const c = String((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "");
+    // 稳健取数组:模型偶尔返回「解释+数组」或两段 JSON → 依次尝试「首尾括号」与「第一段平衡的 [...]」
+    let arr = null;
+    const cands = [];
     const s = c.indexOf("["), e = c.lastIndexOf("]");
-    if (s < 0 || e < s) return;
-    const arr = JSON.parse(c.slice(s, e + 1));
-    if (Array.isArray(arr) && arr.length) {
-      live.guide = { examples: arr.map((x) => String(x).slice(0, 20)).slice(0, 3), at: Date.now() };
+    if (s >= 0 && e > s) cands.push(c.slice(s, e + 1));
+    const m = c.match(/\[[\s\S]*?\]/);
+    if (m) cands.push(m[0]);
+    for (const cand of cands) {
+      try { const x = JSON.parse(cand); if (Array.isArray(x) && x.length) { arr = x; break; } } catch {}
+    }
+    if (!arr) return;
+    const pick = (x) => String(x && typeof x === "object" ? (x.text || x.idea || x.tip || x.value || "") : x).slice(0, 20);
+    const examples = arr.map(pick).filter(Boolean).slice(0, 3);
+    if (examples.length) {
+      live.guide = { examples, at: Date.now() };
       console.log("[live] 生成引导示例:", JSON.stringify(live.guide.examples));
       changed();
     }
