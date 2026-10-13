@@ -33,6 +33,19 @@
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
 		-Server
+		# 允许 OpenCode Web UI(pocket 域)跨域访问,供其「设置→服务器」添加沙盒
+		Access-Control-Allow-Origin "{$SANDBOX_POCKET_ORIGIN:https://pocket.zxlumen.cn}"
+		Access-Control-Allow-Credentials "true"
+		Vary Origin
+	}
+
+	# ⓪ CORS 预检(浏览器跨域前先 OPTIONS)
+	@preflight method OPTIONS
+	handle @preflight {
+		header Access-Control-Allow-Methods "GET, HEAD, PUT, PATCH, POST, DELETE, OPTIONS"
+		header Access-Control-Allow-Headers "authorization, content-type, accept"
+		header Access-Control-Max-Age "86400"
+		respond "" 204
 	}
 
 	# ⓪ 响应压缩(bundle 较大;SSE 带 no-transform 会自动跳过)

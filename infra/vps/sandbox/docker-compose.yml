@@ -34,6 +34,8 @@ services:
       # 锁定用的唯一会话 id(Caddyfile 里的 {$PLAYGROUND_SESSION_ID:ses_guest} 读它)
       PLAYGROUND_SESSION_ID: ${PLAYGROUND_SESSION_ID:-ses_guest}
       PLAYGROUND_SERVER_PASSWORD: ${PLAYGROUND_SERVER_PASSWORD:-}
+      # 允许 OpenCode Web UI(pocket 域)跨域把沙盒加为「服务器」
+      SANDBOX_POCKET_ORIGIN: ${SANDBOX_POCKET_ORIGIN:-https://pocket.zxlumen.cn}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - sandbox-caddy-data:/data
