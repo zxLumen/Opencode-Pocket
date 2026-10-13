@@ -1374,7 +1374,24 @@ async function ensureBuild() {
   } catch {}
 }
 // ---------- 空闲自动创作:没票 + 会话空闲时,按当前情况自动提案让 AI 继续做 ----------
-async function proposeTask() {
+const SITE_DIRS = { up: 1, down: 1, top: 1, bottom: 1 };
+function sanitizeSite(s) {
+  if (!s || typeof s !== "object") return null;
+  const t = String(s.type || "");
+  if (t === "scroll") return { type: "scroll", dir: SITE_DIRS[String(s.dir || "")] ? String(s.dir) : "down" };
+  if (t === "click" && s.text) return { type: "click", text: String(s.text).slice(0, 20) };
+  if (t === "reload") return { type: "reload" };
+  if (t === "back") return { type: "back" };
+  return null;
+}
+// 立即在预览执行页面操作(导演自己的「镜头移动」,不进 5s 投票窗口)
+function fireSite(cmd) {
+  live.site = { seq: (live.siteSeq = (live.siteSeq || 0) + 1), ...cmd };
+  console.log("[live] 预览移动:", siteLabel(cmd), JSON.stringify(cmd));
+  changed();
+}
+// 站在【观众视角】的三段计划:{before?, task?, after?}
+async function proposePlan() {
   if (!GATEWAY_TOKEN) return null;
   let site = "";
   try {
@@ -1385,25 +1402,39 @@ async function proposeTask() {
   const recent = live.executed.slice(-8).map((e) => e.text).join(" | ").slice(0, 400);
   const guide = live.guide && live.guide.examples ? live.guide.examples.join(" | ") : "";
   try {
-    const sys = "你是无人值守的直播导演。现在没有观众投票,请根据「当前网站情况」和「最近做过的事」,提出【一个】下一小步:具体、可实现、有创意、不破坏性、能明显提升这个网站。用中文,一句话,可直接执行。只输出这句话,不要解释。";
+    const sys = "你是无人值守的直播导演,要站在【观众视角】安排下一轮:观众只能看到右侧预览的当前那一屏。" +
+      "请给一个三段计划:before(可选,动手前把预览移动/点开到相关位置)、task(一句要 AI 做的改进,具体、可实现、不破坏性)、after(可选,做完后把预览移动/点开到能看到效果的位置)。" +
+      "若某段不需要就省略该字段。页面操作仅支持:{\"type\":\"scroll\",\"dir\":\"up|down|top|bottom\"} 或 {\"type\":\"click\",\"text\":\"要点的文字\"} 或 {\"type\":\"reload\"} 或 {\"type\":\"back\"}。" +
+      "只输出 JSON:{\"before\":{...},\"task\":\"...\",\"after\":{...}}。不要解释。";
     const r = await fetch(GATEWAY_URL + "/chat/completions", {
       method: "POST",
       headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
-      body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0.8, messages: [
+      body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0.7, messages: [
         { role: "system", content: sys },
         { role: "user", content: JSON.stringify({ 当前网站: site, 最近已做: recent, 参考方向: guide }) },
       ] }),
     });
     if (!r.ok) return null;
     const d = await r.json();
-    const c = String((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "")
-      .trim().replace(/^["「【]+|["」】]+$/g, "").split("\n")[0].trim();
-    return c ? c.slice(0, 140) : null;
+    const content = String((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "").trim();
+    const s = content.indexOf("{"), e = content.lastIndexOf("}");
+    if (s < 0 || e < s) return null;
+    let o;
+    try { o = JSON.parse(content.slice(s, e + 1)); } catch { return null; }
+    const task = o && o.task ? String(o.task).trim().replace(/\s+/g, " ").slice(0, 140) : "";
+    return { before: sanitizeSite(o && o.before), task: task, after: sanitizeSite(o && o.after) };
   } catch { return null; }
+}
+async function waitIdle(timeoutMs) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    if (live.session === "idle" || live.blocked) return;
+    await sleep(2000);
+  }
 }
 async function autoCreateLoop() {
   if (!AUTO_CREATE) return;
-  console.log("[live] 空闲自动创作已启用: 间隔", Math.round(AUTO_CREATE_MS / 1000), "s, 上限", AUTO_CREATE_MAX || "不限");
+  console.log("[live] 空闲自动创作(观众视角)已启用: 间隔", Math.round(AUTO_CREATE_MS / 1000), "s, 上限", AUTO_CREATE_MAX || "不限", "页面操作", SITE_CMD_ENABLED ? "允许" : "关闭");
   let count = 0;
   for (;;) {
     await sleep(5000);
@@ -1415,10 +1446,21 @@ async function autoCreateLoop() {
     if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) continue;
     if (AUTO_CREATE_MAX > 0 && count >= AUTO_CREATE_MAX) continue;
     if (Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue;
-    const task = await proposeTask();
-    if (!task || task === live.lastSentText) continue;
-    console.log("[live] 空闲自动提案:", task);
-    if (await injectTop({ text: task, votes: 1, voters: [] }, "auto")) count++;
+    const plan = await proposePlan();
+    if (!plan || !plan.task || plan.task === live.lastSentText) continue;
+    // 1) before:动手前先把观众视角移到相关位置
+    if (plan.before && SITE_CMD_ENABLED) { fireSite(plan.before); await sleep(1500); }
+    // 2) task:交给 AI 做
+    console.log("[live] 空闲自动创作任务:", plan.task);
+    const ok = await injectTop({ text: plan.task, votes: 1, voters: [] }, "auto");
+    if (!ok) continue;
+    count++;
+    // 3) 等这轮跑完
+    await waitIdle(180000);
+    // 4) after:移过去让观众看到效果
+    if (plan.after && SITE_CMD_ENABLED) { fireSite(plan.after); await sleep(1500); }
+    live.lastInjectAt = Date.now();
+    changed();
   }
 }
 async function injectTop(top, src) {
