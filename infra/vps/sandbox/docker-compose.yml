@@ -113,10 +113,10 @@ services:
     cpus: 1.0
     pids_limit: 256
     volumes:
-      # 访客共享工作区(可写)
-      - playground-data:/workspace
-      # 家目录(会话/状态/配置);配置内容每次启动由 entrypoint 覆盖回出厂值
-      - playground-home:/home/opencode
+      # 5G loopback 盘(唯一可写数据区):访客共享工作区 + 家目录(会话/状态/配置)
+      # 由 deploy.sh/fstab 保证先挂载;写满 5G 即失败,宿主其它目录不可达
+      - ${PLAYGROUND_DATA_DIR:-/srv/sandbox-5g}/workspace:/workspace
+      - ${PLAYGROUND_DATA_DIR:-/srv/sandbox-5g}/home:/home/opencode
     expose:
       - "4096"
     networks:
@@ -188,13 +188,8 @@ services:
 volumes:
   sandbox-caddy-data:
   sandbox-caddy-config:
-  # 跨栈复用博客栈创建的卷(里面是访客会话与工作区,必须保留)
-  playground-data:
-    external: true
-    name: docker_playground-data
-  playground-home:
-    external: true
-    name: docker_playground-home
+  # 注:沙盒数据已迁到 5G loopback 盘(bind mount,见 deploy.sh / fstab);
+  # 旧卷 docker_playground-data / docker_playground-home 保留作冷备份,不再挂载。
 
 networks:
   # 博客栈创建的共享内网:app(AI 网关)+ caddy(反代)都在上面

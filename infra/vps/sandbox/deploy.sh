@@ -14,6 +14,18 @@ export OPENCODE_SANDBOX_TAG="${IMAGE_TAG}"
 [[ "${EUID}" -eq 0 ]] || SUDO="sudo -n"
 echo "[sandbox-deploy] tag=${IMAGE_TAG} (工作目录: $(pwd))"
 
+# 确保 5G 数据盘已挂载(否则 bind mount 失败)。开机由 /etc/fstab 挂,这里兜底自愈。
+DATA_DIR="${PLAYGROUND_DATA_DIR:-/srv/sandbox-5g}"
+DATA_IMG="${PLAYGROUND_DATA_IMG:-/home/ubuntu/Opencode-Pocket/sandbox/playground-5g.img}"
+if ! mountpoint -q "${DATA_DIR}"; then
+  echo "[sandbox-deploy] ${DATA_DIR} 未挂载,尝试挂载 ${DATA_IMG}"
+  ${SUDO:-} mkdir -p "${DATA_DIR}"
+  ${SUDO:-} mount -o loop "${DATA_IMG}" "${DATA_DIR}" \
+    || echo "[sandbox-deploy] 警告:数据盘挂载失败,bind mount 会失败"
+fi
+${SUDO:-} mkdir -p "${DATA_DIR}/workspace" "${DATA_DIR}/home"
+${SUDO:-} chown 10001:10001 "${DATA_DIR}/workspace" "${DATA_DIR}/home" 2>/dev/null || true
+
 # sudo 默认 env_reset 会清掉变量,用 env 显式传回 compose
 ${SUDO:-} env OPENCODE_SANDBOX_TAG="${OPENCODE_SANDBOX_TAG}" docker compose pull opencode-play
 
