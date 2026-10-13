@@ -636,6 +636,21 @@ function normText(s) {
     .replace(/[\s\u3000]+/g, "")
     .replace(/[\p{P}\p{S}]/gu, "");
 }
+// 整句选择语 → 1-based 序号(仅当整条消息就是选择语时生效,避免误判)
+const CN_NUM = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+function parsePick(text) {
+  const t = String(text || "").trim();
+  if (!t) return null;
+  let m = t.match(/^#?\+?(\d{1,2})$/);
+  if (m) return Number(m[1]);
+  m = t.match(/^第\s*([0-9]+|[一二两三四五六七八九十])\s*(个|项|条|题|选项)?\s*[吧的呀了好]?$/);
+  if (m) return CN_NUM[m[1]] || Number(m[1]);
+  m = t.match(/^(?:选|投|投票|选项|选第|投给|我要)\s*#?([0-9]+|[一二两三四五六七八九十])\s*(个|项|条|题)?\s*[吧的呀了好]?$/);
+  if (m) return CN_NUM[m[1]] || Number(m[1]);
+  m = t.match(/^([0-9]+)\s*号\s*[吧的呀了好]?$/);
+  if (m) return Number(m[1]);
+  return null;
+}
 let idSeq = 0;
 function newOptId() { idSeq += 1; return "o" + Date.now().toString(36) + idSeq.toString(36); }
 
@@ -670,9 +685,9 @@ function handleChat(text, channelId) {
   const t = String(text || "").trim();
   if (!t) return;
   if (live.questionVote) { qvVote(t, channelId || "anon:" + Math.random().toString(36).slice(2, 8)); return; }
-  const m = t.match(/^#?(\d{1,2})$/) || t.match(/^\+(\d{1,2})$/) || t.match(/^(?:投票|vote)\s*#?(\d{1,2})$/i);
-  if (m) {
-    const opt = sortedOptions()[Number(m[1]) - 1];
+  const n = parsePick(t);
+  if (n) {
+    const opt = sortedOptions()[n - 1];
     if (opt) vote(opt, channelId);
     return;
   }
@@ -1035,8 +1050,8 @@ function qvVote(text, uid) {
   if (!cur.firstVoteAt) cur.firstVoteAt = Date.now();
   const norm = normText(raw);
   let key = null;
-  const m = raw.match(/^#?(\d{1,2})$/);
-  if (m) { const o = f.options[Number(m[1]) - 1]; if (o) key = o.value; }
+  const n = parsePick(raw);
+  if (n) { const o = f.options[n - 1]; if (o) key = o.value; }
   if (!key) for (const o of f.options) { const on = normText(o.label || o.value); if (on && (norm === on || norm.indexOf(on) >= 0)) { key = o.value; break; } }
   if (!key) { if (!f.custom && f.options.length) return false; key = raw; } // 未匹配 → 自定义输入(自由文本候选)
   if (!cur.voters[key]) cur.voters[key] = [];
