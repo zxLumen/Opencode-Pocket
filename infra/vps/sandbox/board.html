@@ -173,7 +173,7 @@
         '<span class="rs ' + r.status + '">' + label + '</span></div>';
     }).join("");
 
-    $("minvotes").textContent = "本轮票王需 ≥ " + st.minVotes + " 票才会自动发送;发送后清零。";
+    $("minvotes").textContent = st.minVotes > 0 ? ("本轮票王需 ≥ " + st.minVotes + " 票才会自动发送;发送后清零。") : "会话空闲即把当前票王发给沙盒;发送后清零。";
   }
 
   function load() {

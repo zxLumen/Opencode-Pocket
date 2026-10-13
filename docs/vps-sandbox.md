@@ -317,10 +317,16 @@ Xvfb(虚拟屏 1280x720)
 - **历史消息不参与**：首次连接只记游标，不把开播前的聊天当投票。
 - **合并**：先做文本规范化精确去重（完全相同直接并票）；再每 30s 调一次博客 AI 网关做
   语义合并（意思相近的并成一条、票数相加，保留票数最高那句）。
+- **弹幕审核**（`PLAYGROUND_MODERATE`，默认开，`both`）：先**规则**过滤（纯表情/符号、链接、`@`、
+  刷屏重复、纯数字、屏蔽词 `PLAYGROUND_BLOCKLIST`），再交**博客 AI 网关**判意图——只有「对沙盒的
+  明确指令 `instruction`」进投票；`chitchat`/`comment`（闲聊/吐槽）、`unsafe`（有害）、`injection`
+  （提示注入）一律丢弃。同文本判定**缓存**、每 2s **批量**判定；审核失败默认**放行**
+  （`PLAYGROUND_MODERATE_FAIL=open`）。这一步同时缓解「陌生人文本喂给 agent」的注入风险。
 - **自动接棒**：监听 `session.idle` / `session.execution.succeeded`（另有 `/api/session/active`
-  轮询兜底）→ 校验「总开关 / 冷却 / 最小票数 / 非上一条」→ `POST /api/session/<id>/prompt`
-  注入 `【观众投票 · 第 N 轮】<意见>` → 清零。失败只标记、不自动接棒。
-- **护栏**：最小票数、冷却秒数、最大轮数（防无限烧预算）、自动接棒总开关（榜单页右上「⚙」）。
+  轮询兜底）→ **只要会话空闲**就把当前票王 `POST /api/session/<id>/prompt` 注入
+  `【观众投票 · 第 N 轮】<意见>` → 清零。默认**不设票数门槛、无冷却**（`PLAYGROUND_MIN_VOTES=0`、
+  `PLAYGROUND_COOLDOWN_SEC=0`）。失败只标记、不自动接棒。
+- **护栏**：最大轮数（`PLAYGROUND_MAX_ROUNDS`，防无限烧预算）、自动接棒总开关（榜单页右上「⚙」）。
 - **状态持久化**：`/home/opencode/.local/state/sandbox/live.json`（家目录卷，部署/重启不丢）。
 
 **端点**（辅助服务；Caddy 已放行 `^/__lb/` 与 `GET /board`）：
