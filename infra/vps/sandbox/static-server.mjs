@@ -987,7 +987,17 @@ async function answerForm(id, fields) {
   for (const f of fields || []) {
     if (f.hidden) continue;
     const t = String(f.type || "string");
-    if (t === "boolean") answer[f.key] = false;
+    const opts = Array.isArray(f.options) ? f.options : [];
+    if (opts.length) {
+      // 选择题:交网关在选项里挑,答案取选项的 value(无 value 用 label)
+      const labels = opts.map((o) => String((o && (o.label != null ? o.label : o.value)) || ""));
+      const valOf = (o) => String((o && (o.value != null ? o.value : o.label)) || "");
+      let picked = [];
+      const g = await gatewayPick({ question: f.title || f.description || f.key, options: labels, multiple: t === "multiselect" });
+      if (g) picked = opts.filter((o) => g.includes(String((o && (o.label != null ? o.label : o.value)) || ""))).map(valOf);
+      if (!picked.length) picked = [valOf(opts[0])];
+      answer[f.key] = t === "multiselect" ? picked : picked[0];
+    } else if (t === "boolean") answer[f.key] = false;
     else if (t === "number" || t === "integer") answer[f.key] = 0;
     else if (t === "multiselect") answer[f.key] = [];
     else answer[f.key] = "";
@@ -1018,6 +1028,13 @@ async function askLoop() {
         const f = await upJSON("/api/form");
         for (const it of ((f && f.data) || []).filter((x) => !x.sessionID || x.sessionID === SESSION_ID)) {
           if (QUESTION_POLICY !== "pause") { await answerForm(it.id, it.fields); console.log("[live] 代答 form:", it.title || ""); }
+          else blocked = { kind: "form", title: it.title || "表单" };
+        }
+      } catch {}
+      try { // 会话级 form:question 工具走这里(GET /api/session/<id>/form)
+        const sf = await upJSON("/api/session/" + encodeURIComponent(SESSION_ID) + "/form");
+        for (const it of ((sf && sf.data) || [])) {
+          if (QUESTION_POLICY !== "pause") { await answerForm(it.id, it.fields); console.log("[live] 代答 form(会话级):", it.title || ""); }
           else blocked = { kind: "form", title: it.title || "表单" };
         }
       } catch {}
