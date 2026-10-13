@@ -523,7 +523,7 @@ const MODERATE_FAIL_OPEN = process.env.PLAYGROUND_MODERATE_FAIL !== "closed"; //
 const MODERATE_MIN_LEN = Number(process.env.PLAYGROUND_MODERATE_MIN_LEN || 2);
 const BLOCKLIST = String(process.env.PLAYGROUND_BLOCKLIST || "").split(",").map((s) => s.trim()).filter(Boolean);
 const MERGE_ENABLED = process.env.PLAYGROUND_MERGE !== "0";
-const MERGE_INTERVAL_MS = Number(process.env.PLAYGROUND_MERGE_INTERVAL_MS || 30000);
+const MERGE_INTERVAL_MS = Number(process.env.PLAYGROUND_MERGE_INTERVAL_MS || 8000); // 有新选项后去抖多久触发合并
 const AUTO_DIRECT_DEFAULT = process.env.PLAYGROUND_AUTODIRECT !== "0";
 const ADMIN_TOKEN = process.env.PLAYGROUND_ADMIN_TOKEN || "";
 const MAX_OPINION_LEN = Number(process.env.PLAYGROUND_MAX_OPINION_LEN || 120);
@@ -561,6 +561,9 @@ let live = {
   blocked: null, // { kind: question|permission|form, title }
   questions: {}, // SSE 收集的待答问题 id -> {id, questions}
   questionVote: null, // 问题投票状态机(逐题)
+  site: null, // 最近一次下发的网站操作 {seq,type,...}
+  siteSeq: 0,
+  siteFirstAt: null,
   chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, loggedIn: Boolean(BILI_SESSDATA), chatId: null, videoId: YT_VIDEO_ID || null, detail: CHAT_SOURCE === "bilibili" ? (BILI_ROOM_ID || null) : (YT_VIDEO_ID || null), lastAt: 0, error: null },
 };
 
@@ -610,6 +613,7 @@ function publicState() {
     agent: live.agent,
     blocked: live.blocked,
     question: qvPublic(),
+    site: live.site || null,
     minVotes: MIN_VOTES,
     cooldownSec: Math.round(COOLDOWN_MS / 1000),
     maxRounds: MAX_ROUNDS,
@@ -691,6 +695,7 @@ function handleChat(text, channelId) {
     if (opt) vote(opt, channelId);
     return;
   }
+  if (SITE_CMD_ENABLED) { const sc = parseSiteCmd(t); if (sc) { siteVote(sc, channelId); return; } }
   enqueueOpinion(t, channelId);
 }
 const lastByUser = new Map();
@@ -871,6 +876,37 @@ async function ytLoop() {
 // ---------- AI 语义合并(把意思相近的意见并成一条,票数相加) ----------
 let mergeDirty = false, mergeRunning = false;
 function markMergeDirty() { if (MERGE_ENABLED) mergeDirty = true; }
+function bigrams(s) { const set = new Set(); for (let i = 0; i + 1 < s.length; i++) set.add(s.slice(i, i + 2)); if (!set.size && s) set.add(s); return set; }
+function jaccard(a, b) { const A = bigrams(a), B = bigrams(b); if (!A.size || !B.size) return 0; let inter = 0; for (const x of A) if (B.has(x)) inter++; return inter / (A.size + B.size - inter); }
+function recount(o) { o.voters = [...new Set(o.voters || [])]; o.votes = o.voters.length; }
+// 去口语/填充词后再比较(「做个贪吃蛇」≈「做贪吃蛇」)
+const FILLER = ["帮我", "请", "麻烦", "能不能", "可以", "一下", "一点", "一个", "个", "的", "了", "吧", "呗", "呀", "啊", "嘛", "给我"];
+function looseNorm(s) { let t = s; for (const f of FILLER) t = t.split(f).join(""); return t || s; }
+// 本地近似合并(即时,AI 之前):同类 + (去填充后一方包含另一方 或 字符bigram Jaccard≥0.6)
+function localMerge() {
+  if (!MERGE_ENABLED || live.options.length < 2) return false;
+  let merged = false, again = true;
+  while (again) {
+    again = false;
+    outer: for (let i = 0; i < live.options.length; i++) {
+      for (let j = i + 1; j < live.options.length; j++) {
+        const a = live.options[i], b = live.options[j];
+        if ((a.kind || "opinion") !== (b.kind || "opinion")) continue;
+        const la = looseNorm(a.norm), lb = looseNorm(b.norm);
+        const contains = la.length >= 2 && lb.length >= 2 && (la.includes(lb) || lb.includes(la));
+        if (!contains && jaccard(la, lb) < 0.6) continue;
+        const keep = a.votes >= b.votes ? a : b, drop = keep === a ? b : a;
+        keep.votes += drop.votes;
+        for (const v of drop.voters || []) if (!keep.voters.includes(v)) keep.voters.push(v);
+        recount(keep);
+        live.options = live.options.filter((o) => o !== drop);
+        merged = true; again = true;
+        break outer;
+      }
+    }
+  }
+  return merged;
+}
 async function aiMerge() {
   if (!MERGE_ENABLED || !GATEWAY_TOKEN || live.options.length < 2) return;
   const list = live.options.map((o) => ({ id: o.id, text: o.text }));
@@ -901,11 +937,13 @@ async function aiMerge() {
     const ids = new Set(g);
     const opts = live.options.filter((o) => ids.has(o.id)).sort((a, b) => b.votes - a.votes);
     if (opts.length < 2) continue;
+    if (new Set(opts.map((o) => o.kind || "opinion")).size > 1) continue; // 不跨类型合并
     const keep = opts[0];
     for (const o of opts.slice(1)) {
       keep.votes += o.votes;
       for (const v of o.voters) if (!keep.voters.includes(v)) keep.voters.push(v);
     }
+    recount(keep); // 票数 = 去重投票人数
     const drop = new Set(opts.slice(1).map((o) => o.id));
     live.options = live.options.filter((o) => !drop.has(o.id));
     merged = true;
@@ -917,7 +955,10 @@ async function mergeLoop() {
     await sleep(MERGE_INTERVAL_MS);
     if (!mergeDirty || mergeRunning) continue;
     mergeDirty = false; mergeRunning = true;
-    try { await aiMerge(); } catch (e) { console.error("[live] 合并异常:", (e && e.message) || e); }
+    try {
+      if (localMerge()) { console.log("[live] 本地近似合并,剩", live.options.length, "条"); changed(); maybeInject(); }
+      await aiMerge();
+    } catch (e) { console.error("[live] 合并异常:", (e && e.message) || e); }
     mergeRunning = false;
   }
 }
@@ -955,6 +996,8 @@ async function detectSwitch(text) {
 // 观众投票是「下一轮想让模型做的事」,不是 question 的答案 → 阻塞期间不注入、不拿投票答题。
 const QUESTION_POLICY = String(process.env.PLAYGROUND_QUESTION_POLICY || "vote").toLowerCase(); // vote|auto|pause
 const QUESTION_VOTE_MS = Number(process.env.PLAYGROUND_QUESTION_VOTE_SEC || 20) * 1000; // 问题投票时长(自该题首条弹幕起)
+const SITE_CMD_ENABLED = process.env.PLAYGROUND_SITE_CMD !== "0"; // 弹幕操控网站预览
+const SITE_VOTE_MS = Number(process.env.PLAYGROUND_SITE_VOTE_SEC || 5) * 1000; // 网站操作投票时长
 const PERMISSION_POLICY = String(process.env.PLAYGROUND_PERMISSION_POLICY || "reject").toLowerCase(); // reject|once|always
 async function upJSON(path) {
   const r = await upstreamFetch(path);
@@ -1103,6 +1146,56 @@ async function qvTick() {
 }
 async function qvLoop() { for (;;) { await sleep(1000); try { await qvTick(); } catch {} } }
 
+// ---------- 网站操作(并入意见票池, kind:"site";SITE_VOTE_MS 后用票首在预览执行) ----------
+function parseSiteCmd(text) {
+  const t = String(text || "").trim();
+  if (!t) return null;
+  if (/(刷新|重载|重新加载|reload)/i.test(t)) return { type: "reload" };
+  if (/(返回|后退|上一页|back)/i.test(t)) return { type: "back" };
+  if (/(回到顶部|到顶部|滚到顶|最上面|顶部|置顶)/.test(t)) return { type: "scroll", dir: "top" };
+  if (/(到底部|到最下|滚到底|最下面|底部|最底)/.test(t)) return { type: "scroll", dir: "bottom" };
+  if (/(往下|下翻|下滑|下滚|向下|往下滑|往下滚|往下点|往下走|往下一点|下一点|网页往下|页面往下|下移)/.test(t)) return { type: "scroll", dir: "down" };
+  if (/(往上|上翻|上滑|上滚|向上|往上一点|上一点|上移)/.test(t)) return { type: "scroll", dir: "up" };
+  const m = t.match(/(?:点开|打开|点击|点一下|点|按)\s*[「"']?([^」"'，。,.！!？?\s]{1,20})/);
+  if (m) return { type: "click", text: m[1].trim() };
+  return null;
+}
+function siteKey(cmd) { return cmd.type === "scroll" ? "site:scroll:" + cmd.dir : cmd.type === "click" ? "site:click:" + cmd.text : "site:" + cmd.type; }
+function siteLabel(cmd) {
+  if (cmd.type === "scroll") return "▶ " + ({ down: "下滚", up: "上滚", top: "回顶部", bottom: "到底部" }[cmd.dir] || "滚动");
+  if (cmd.type === "click") return "▶ 点开 " + cmd.text;
+  return cmd.type === "back" ? "▶ 返回" : "▶ 刷新";
+}
+function siteVote(cmd, channelId) {
+  const key = siteKey(cmd);
+  channelId = channelId || "anon:" + Math.random().toString(36).slice(2, 8);
+  let opt = live.options.find((o) => o.kind === "site" && o.norm === key);
+  if (!opt) {
+    opt = { id: newOptId(), text: siteLabel(cmd), norm: key, kind: "site", cmd: JSON.stringify(cmd), votes: 0, voters: [], createdAt: Date.now() };
+    live.options.push(opt);
+  }
+  if (!live.siteFirstAt) live.siteFirstAt = Date.now();
+  vote(opt, channelId);
+}
+async function siteTick() {
+  if (!SITE_CMD_ENABLED) return;
+  const sites = live.options.filter((o) => o.kind === "site");
+  if (!sites.length) { if (live.siteFirstAt) live.siteFirstAt = null; return; }
+  if (!live.siteFirstAt) { live.siteFirstAt = Date.now(); return; }
+  if (Date.now() - live.siteFirstAt < SITE_VOTE_MS) return;
+  const top = sites.slice().sort((a, b) => b.votes - a.votes || a.createdAt - b.createdAt)[0];
+  let cmd = {};
+  try { cmd = JSON.parse(top.cmd || "{}"); } catch {}
+  live.site = { seq: (live.siteSeq = (live.siteSeq || 0) + 1), ...cmd };
+  live.executed.push({ round: live.round, text: top.text, votes: top.votes, at: Date.now(), status: "done" });
+  if (live.executed.length > 200) live.executed = live.executed.slice(-200);
+  live.options = live.options.filter((o) => o.kind !== "site"); // 清掉本轮网站操作
+  live.siteFirstAt = null;
+  console.log("[live] 网站操作执行:", top.text, JSON.stringify(cmd));
+  changed();
+}
+async function siteLoop() { for (;;) { await sleep(1000); try { await siteTick(); } catch {} } }
+
 let askBusy = false;
 async function askLoop() {
   for (;;) {
@@ -1240,7 +1333,7 @@ function maybeInject() {
   if (live.session !== "idle") return;
   if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) return;
   if (Date.now() - live.lastInjectAt < COOLDOWN_MS) return;
-  const list = sortedOptions().filter((o) => o.votes >= MIN_VOTES);
+  const list = sortedOptions().filter((o) => o.votes >= MIN_VOTES && (o.kind || "opinion") !== "site");
   if (!list.length) return;
   // 顺延:优先取票数最高、且不是「上一条刚发过」的那条;若全都相同则兜底照发票王(绝不卡死)
   let top = list.find((o) => o.text !== live.lastSentText);
@@ -1510,7 +1603,7 @@ function startLive() {
   if (CHAT_SOURCE === "bilibili") biliLoop();
   else if (CHAT_SOURCE === "youtube") ytLoop();
   else console.log("[live] 未配置弹幕源(YT_API_KEY/YT_VIDEO_ID 或 BILI_ROOM_ID)");
-  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); sessionEventLoop(); sessionPollLoop();
+  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); sessionEventLoop(); sessionPollLoop();
   console.log("[live] 直播投票已启动: 轮次=", live.round, "自动接棒=", live.autoDirect, "最小票数=", MIN_VOTES, "自动合并=", MERGE_ENABLED);
   setTimeout(maybeInject, 5000); // 重启后若已有票且会话空闲,补接一轮
 }

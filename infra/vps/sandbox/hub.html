@@ -215,6 +215,35 @@
   })();
   // 兜底:最多 6 秒后无论如何也把预览挂上
   setTimeout(startPreview, 6000);
+
+  // ---- 观众「网站操作」:只作用于预览 iframe(#f-site),不碰会话/系统 ----
+  function applySite(site) {
+    var f = document.getElementById("f-site");
+    var w = f && f.contentWindow, d = w && w.document;
+    if (!w || !d) return;
+    try {
+      if (site.type === "scroll") {
+        var dy = site.dir === "up" ? -600 : site.dir === "top" ? -1e6 : site.dir === "bottom" ? 1e6 : 600;
+        try { w.scrollBy(0, dy); } catch (e) {}
+        if (d.documentElement) d.documentElement.scrollTop += dy;
+        if (d.body) d.body.scrollTop += dy;
+      } else if (site.type === "click") {
+        var t = String(site.text || "");
+        var els = d.querySelectorAll("a,button,[role=button],input[type=button],input[type=submit],li,div,span,label");
+        for (var i = 0; i < els.length; i++) {
+          var txt = (els[i].textContent || "").trim();
+          if (txt && t && (txt === t || txt.indexOf(t) >= 0)) { els[i].click(); break; }
+        }
+      } else if (site.type === "back") { w.history.back(); }
+      else if (site.type === "reload") { f.src = f.src; }
+    } catch (e) {}
+  }
+  var lastSiteSeq = 0;
+  setInterval(function () {
+    fetch("/__lb/state", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (s) {
+      if (s && s.site && s.site.seq && s.site.seq !== lastSiteSeq) { lastSiteSeq = s.site.seq; applySite(s.site); }
+    }).catch(function () {});
+  }, 1000);
 })();
 </script>
 </body>
