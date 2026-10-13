@@ -211,7 +211,8 @@
         '<span class="rs ' + r.status + '">' + label + '</span></div>';
     }).join("");
 
-    $("minvotes").textContent = st.minVotes > 0 ? ("本轮票王需 ≥ " + st.minVotes + " 票才会自动发送;执行后从票池移除。") : "会话空闲即把当前票王发给沙盒;执行后从票池移除。";
+    var fTxt = st.focus ? ("当前聚焦: " + (st.focus.action === "create" ? "新建" : "改造") + " " + (st.focus.page || st.focus.title || "") + " · 第 " + st.focus.rounds + " 轮 · ") : "";
+    $("minvotes").textContent = fTxt + (st.minVotes > 0 ? ("本轮票王需 ≥ " + st.minVotes + " 票才会自动发送;执行后从票池移除。") : "会话空闲即把当前票王发给沙盒;执行后从票池移除。");
     var bl = $("blocked");
     if (st.blocked && st.blocked.title) { bl.textContent = "等待回答(" + (st.blocked.kind || "") + "):" + st.blocked.title + " · 接棒已暂停,投票保留"; bl.classList.add("show"); }
     else { bl.classList.remove("show"); bl.textContent = ""; }

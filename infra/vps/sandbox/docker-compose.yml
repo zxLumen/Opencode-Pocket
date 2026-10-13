@@ -97,6 +97,9 @@ services:
       PLAYGROUND_AUTO_CREATE: ${PLAYGROUND_AUTO_CREATE:-0}
       PLAYGROUND_AUTO_CREATE_INTERVAL_SEC: ${PLAYGROUND_AUTO_CREATE_INTERVAL_SEC:-45}
       PLAYGROUND_AUTO_CREATE_MAX: ${PLAYGROUND_AUTO_CREATE_MAX:-0}
+      # 自动创作「聚焦」:最少停留轮数 / 软上限(到点建议换)
+      PLAYGROUND_AUTO_FOCUS_MIN: ${PLAYGROUND_AUTO_FOCUS_MIN:-3}
+      PLAYGROUND_AUTO_FOCUS_MAX: ${PLAYGROUND_AUTO_FOCUS_MAX:-6}
       # B 站直播间号(短号或真实 room_id);匿名读公开弹幕,无需 OAuth
       BILI_ROOM_ID: ${BILI_ROOM_ID:-}
       # 可选:以「已登录观众」身份读弹幕(低人气房间匿名常收不到)。SESSDATA 敏感,建议小号、只读。

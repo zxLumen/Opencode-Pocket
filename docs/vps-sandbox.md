@@ -395,12 +395,15 @@ Xvfb(虚拟屏 1280x720)
   「**强制接棒**」按钮手动触发：`POST /api/session/<id>/interrupt` 清掉僵死 run 并立即接下一棒。
   榜单页同时显示当前轮「已耗时 Xm」。
 - **护栏**：最大轮数（`PLAYGROUND_MAX_ROUNDS`，防无限烧预算）、自动接棒总开关（榜单页右上「⚙」）。
-- **空闲自动创作（观众视角，`PLAYGROUND_AUTO_CREATE`）**：**没有票 + 会话空闲**时，把「当前
-  `/workspace/index.html` 摘要 + 最近已做 + 引导示例」交给博客 AI 网关，生成**三段计划**
-  `{before?, task, after?}`：**before**（可选）先把**预览**移到相关位置 → **task**（一句具体、不破坏性的
-  改进，以 `【空闲自动创作】<任务>` 注入，强制 build、标 `【自动】`）→ 等这轮跑完 → **after**（可选）
-  再把预览移到「能看到效果」处。页面操作用 `state.site` **立即**在预览执行（导演镜头移动，不进 5s 投票窗口）。
-  间隔 `PLAYGROUND_AUTO_CREATE_INTERVAL_SEC`（默认 45s）；有票时**让位给观众**；上限 `PLAYGROUND_AUTO_CREATE_MAX`（0=不限）。
+- **空闲自动创作（观众视角，`PLAYGROUND_AUTO_CREATE`）**：**没有票 + 会话空闲**时，把「**全站页面清单**
+  （`/workspace/*.html` 文件名+标题+摘要）」+「最近已做」+「引导示例」交给博客 AI 网关，让它选一种动作：
+  **`improve`**（挑一个现有页面做**有创意**的升级，少做纯样式微调）或 **`create`**（**从零做一个新东西**
+  并在首页加入口）。返回 `{action,page,title,task,before,after}`；页面操作用 `state.site` **立即**在预览执行
+  （`goto` 切页 / `scroll` / `click` / `reload` / `back`）。
+  - **连贯性**：用「**聚焦**」避免频繁跳页/跳动作——`PLAYGROUND_AUTO_FOCUS_MIN`（默认 3）轮内**强制**在同一
+    聚焦上继续，超过 `AUTO_FOCUS_MIN` 才可换，`PLAYGROUND_AUTO_FOCUS_MAX`（默认 6）到点**建议换**新方向；
+    `create` 出的新东西会成为新聚焦继续做几轮。
+  - 有票时**让位给观众**；上限 `PLAYGROUND_AUTO_CREATE_MAX`（0=不限）。榜单底部显示「当前聚焦」。
 - **阻塞处理（question / permission / form）**：agent 提问或申请权限时**暂停意见接棒**（不注入、不拿意见投票答题，
   意见池数据保留）。**question 默认改为「逐题弹幕投票」**（`PLAYGROUND_QUESTION_POLICY=vote`）：
   会话级 form 的每题各开一轮，观众发 `#序号`/选项文字/整句选择语（「第一个」「选2」「1号」等）投票，

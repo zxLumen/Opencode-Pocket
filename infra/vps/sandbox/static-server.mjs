@@ -10,7 +10,7 @@
 //
 // 只用 node 内置模块,无依赖;node 是官方 opencode 镜像自带的运行时。
 import { createServer, request as httpRequest } from "node:http";
-import { stat, readFile, mkdir, writeFile, rename } from "node:fs/promises";
+import { stat, readFile, mkdir, writeFile, rename, readdir } from "node:fs/promises";
 import { createReadStream, appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { extname, join, resolve, sep } from "node:path";
@@ -536,6 +536,8 @@ const GATEWAY_TOKEN = process.env.ZX_AI_APP_TOKEN || "";
 const AUTO_CREATE = process.env.PLAYGROUND_AUTO_CREATE === "1";
 const AUTO_CREATE_MS = Number(process.env.PLAYGROUND_AUTO_CREATE_INTERVAL_SEC || 45) * 1000;
 const AUTO_CREATE_MAX = Number(process.env.PLAYGROUND_AUTO_CREATE_MAX || 0); // 0 = 不限
+const AUTO_FOCUS_MIN = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MIN || 3)); // 聚焦最少停留轮数
+const AUTO_FOCUS_MAX = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MAX || 6)); // 聚焦软上限(到点建议换)
 const YT_API_KEY = process.env.YT_API_KEY || "";
 const YT_VIDEO_ID = (process.env.YT_VIDEO_ID || "").trim();
 const YT_POLL_MS = Number(process.env.YT_POLL_MS || 0);
@@ -572,6 +574,7 @@ let live = {
   site: null, // 最近一次下发的网站操作 {seq,type,...}
   siteSeq: 0,
   siteFirstAt: null,
+  focus: null, // 自动创作聚焦 { action, page, title, rounds }
   guide: null, // { examples:[...], at }
   audience: {}, // channelId -> { name, at, votes }
   chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, loggedIn: Boolean(BILI_SESSDATA), chatId: null, videoId: YT_VIDEO_ID || null, detail: [CHAT_SOURCES.includes("bilibili") && BILI_ROOM_ID ? "bili:" + BILI_ROOM_ID : "", CHAT_SOURCES.includes("youtube") && YT_VIDEO_ID ? "yt:" + YT_VIDEO_ID : "", CHAT_SOURCES.includes("ingest") ? "ingest" : ""].filter(Boolean).join(" ") || null, lastAt: 0, error: null },
@@ -587,6 +590,7 @@ async function loadLive() {
       live.executed = Array.isArray(d.executed) ? d.executed : [];
       live.lastSentText = d.lastSentText || null;
       live.lastInjectAt = Number(d.lastInjectAt) || 0;
+      live.focus = d.focus && typeof d.focus === "object" ? d.focus : null;
       live.currentRun = [...live.executed].reverse().find((e) => e && e.status === "running") || null;
       live.audience = (d.audience && typeof d.audience === "object") ? d.audience : {};
     }
@@ -602,7 +606,7 @@ function saveLive() {
       const tmp = STATE_FILE + ".tmp";
       const data = {
         round: live.round, autoDirect: live.autoDirect, options: live.options,
-        executed: live.executed.slice(-200), lastSentText: live.lastSentText, lastInjectAt: live.lastInjectAt,
+        executed: live.executed.slice(-200), lastSentText: live.lastSentText, lastInjectAt: live.lastInjectAt, focus: live.focus,
         audience: live.audience || {},
       };
       await writeFile(tmp, JSON.stringify(data));
@@ -625,6 +629,7 @@ function publicState() {
     blocked: live.blocked,
     question: qvPublic(),
     site: live.site || null,
+    focus: live.focus || null,
     active: live.options.length,
     guide: (!live.options.length && !live.questionVote && live.guide) ? { examples: live.guide.examples } : null,
     minVotes: MIN_VOTES,
@@ -1463,11 +1468,16 @@ async function ensureBuild() {
 const SITE_DIRS = { up: 1, down: 1, top: 1, bottom: 1 };
 function sanitizeSite(s) {
   if (!s || typeof s !== "object") return null;
-  const t = String(s.type || "");
+  const rawType = String(s.type || "");
+  const t = rawType || (s.goto || s.path ? "goto" : s.dir ? "scroll" : s.text ? "click" : "");
   if (t === "scroll") return { type: "scroll", dir: SITE_DIRS[String(s.dir || "")] ? String(s.dir) : "down" };
   if (t === "click" && s.text) return { type: "click", text: String(s.text).slice(0, 20) };
   if (t === "reload") return { type: "reload" };
   if (t === "back") return { type: "back" };
+  if (t === "goto") {
+    const p = String(s.path || s.goto || "").replace(/^\/+/, "").replace(/[^a-zA-Z0-9._\-\/]/g, "");
+    return p ? { type: "goto", path: p } : null;
+  }
   return null;
 }
 // 立即在预览执行页面操作(导演自己的「镜头移动」,不进 5s 投票窗口)
@@ -1476,28 +1486,47 @@ function fireSite(cmd) {
   console.log("[live] 预览移动:", siteLabel(cmd), JSON.stringify(cmd));
   changed();
 }
-// 站在【观众视角】的三段计划:{before?, task?, after?}
+// 全站页面清单(避免重复 / 找灵感)
+async function sitePages() {
+  const out = [];
+  try {
+    const files = (await readdir(WORKSPACE)).filter((f) => f.endsWith(".html")).slice(0, 20);
+    for (const f of files) {
+      try {
+        const h = await readFile(join(WORKSPACE, f), "utf8");
+        const title = ((h.match(/<title>([^<]*)<\/title>/i) || [])[1] || "").trim();
+        const brief = h.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 80);
+        out.push({ file: f, title: title, brief: brief });
+      } catch {}
+    }
+  } catch {}
+  return out;
+}
+// 站在【观众视角】的创作计划:{action,page,title,task,before?,after?}
 async function proposePlan() {
   if (!GATEWAY_TOKEN) return null;
-  let site = "";
-  try {
-    const html = await readFile(join(WORKSPACE, "index.html"), "utf8");
-    const title = ((html.match(/<title>([^<]*)<\/title>/i) || [])[1] || "").trim();
-    site = (title + " " + html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ")).slice(0, 500);
-  } catch {}
+  const pages = await sitePages();
   const recent = live.executed.slice(-8).map((e) => e.text).join(" | ").slice(0, 400);
   const guide = live.guide && live.guide.examples ? live.guide.examples.join(" | ") : "";
+  const f = live.focus;
+  const rounds = f ? f.rounds || 1 : 0;
+  let focusLine;
+  if (!f) focusLine = "当前没有聚焦:请新开一个方向。";
+  else if (rounds < AUTO_FOCUS_MIN) focusLine = "当前聚焦「" + f.action + " " + (f.page || f.title || "") + "」已第 " + rounds + " 轮 → **必须继续在这个聚焦上做下一步**(完善/加功能),不要换。";
+  else if (rounds < AUTO_FOCUS_MAX) focusLine = "当前聚焦「" + f.action + " " + (f.page || f.title || "") + "」已第 " + rounds + " 轮 → 可继续,也可换(换需理由:已完善 或 别处对观众更有价值)。";
+  else focusLine = "当前聚焦已做 " + rounds + " 轮 → 建议换一个新方向。";
   try {
-    const sys = "你是无人值守的直播导演,要站在【观众视角】安排下一轮:观众只能看到右侧预览的当前那一屏。" +
-      "请给一个三段计划:before(可选,动手前把预览移动/点开到相关位置)、task(一句要 AI 做的改进,具体、可实现、不破坏性)、after(可选,做完后把预览移动/点开到能看到效果的位置)。" +
-      "若某段不需要就省略该字段。页面操作仅支持:{\"type\":\"scroll\",\"dir\":\"up|down|top|bottom\"} 或 {\"type\":\"click\",\"text\":\"要点的文字\"} 或 {\"type\":\"reload\"} 或 {\"type\":\"back\"}。" +
-      "只输出 JSON:{\"before\":{...},\"task\":\"...\",\"after\":{...}}。不要解释。";
+    const sys = "你是无人值守的直播导演,站在【观众视角】安排下一轮(观众只能看到右侧预览的一屏)。\n" +
+      "【动作二选一】improve=挑一个现有页面做**有创意**的升级(优先新玩法/交互/可视化,少做纯样式微调);create=**从零做一个全新的东西**(新页面/新玩法/新工具),并在首页加入口,避免与现有页面重复。\n" +
+      "【连贯性,重要】" + focusLine + "\n" +
+      "【页面操作(before/after,可选)】只支持这些**精确形状**:{\"type\":\"goto\",\"path\":\"页面文件名\"} 或 {\"type\":\"scroll\",\"dir\":\"up|down|top|bottom\"} 或 {\"type\":\"click\",\"text\":\"要点文字\"} 或 {\"type\":\"reload\"} 或 {\"type\":\"back\"};不需要就省略该字段。\n" +
+      "只输出 JSON:{\"action\":\"improve|create\",\"page\":\"现有页面文件名(improve 时)\",\"title\":\"新东西名字(create 时)\",\"task\":\"一句话,具体可执行\",\"before\":{...},\"after\":{...}}。不要解释。";
     const r = await fetch(GATEWAY_URL + "/chat/completions", {
       method: "POST",
       headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
-      body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0.7, messages: [
+      body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0.85, messages: [
         { role: "system", content: sys },
-        { role: "user", content: JSON.stringify({ 当前网站: site, 最近已做: recent, 参考方向: guide }) },
+        { role: "user", content: JSON.stringify({ 现有页面: pages, 最近已做: recent, 参考方向: guide, 聚焦限制: { min: AUTO_FOCUS_MIN, max: AUTO_FOCUS_MAX } }) },
       ] }),
     });
     if (!r.ok) return null;
@@ -1507,8 +1536,14 @@ async function proposePlan() {
     if (s < 0 || e < s) return null;
     let o;
     try { o = JSON.parse(content.slice(s, e + 1)); } catch { return null; }
-    const task = o && o.task ? String(o.task).trim().replace(/\s+/g, " ").slice(0, 140) : "";
-    return { before: sanitizeSite(o && o.before), task: task, after: sanitizeSite(o && o.after) };
+    let action = o && o.action === "create" ? "create" : "improve";
+    let page = o && o.page ? String(o.page).replace(/^\/+/, "").trim().slice(0, 60) : "";
+    const title = o && o.title ? String(o.title).trim().replace(/\s+/g, " ").slice(0, 40) : "";
+    const task = o && o.task ? String(o.task).trim().replace(/\s+/g, " ").slice(0, 160) : "";
+    if (!task) return null;
+    // 最少停留:聚焦未满 MIN 时强制沿用旧聚焦(不换页、不换动作)
+    if (f && rounds < AUTO_FOCUS_MIN) { action = f.action || action; if (f.action === "improve" && f.page) page = f.page; }
+    return { action: action, page: page, title: title, task: task, before: sanitizeSite(o && o.before), after: sanitizeSite(o && o.after) };
   } catch { return null; }
 }
 async function waitIdle(timeoutMs) {
@@ -1520,7 +1555,7 @@ async function waitIdle(timeoutMs) {
 }
 async function autoCreateLoop() {
   if (!AUTO_CREATE) return;
-  console.log("[live] 空闲自动创作(观众视角)已启用: 间隔", Math.round(AUTO_CREATE_MS / 1000), "s, 上限", AUTO_CREATE_MAX || "不限", "页面操作", SITE_CMD_ENABLED ? "允许" : "关闭");
+  console.log("[live] 空闲自动创作已启用: 间隔", Math.round(AUTO_CREATE_MS / 1000), "s, 聚焦", AUTO_FOCUS_MIN + "-" + AUTO_FOCUS_MAX, "轮, 页面操作", SITE_CMD_ENABLED ? "允许" : "关闭");
   let count = 0;
   for (;;) {
     await sleep(5000);
@@ -1533,17 +1568,21 @@ async function autoCreateLoop() {
     if (AUTO_CREATE_MAX > 0 && count >= AUTO_CREATE_MAX) continue;
     if (Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue;
     const plan = await proposePlan();
-    if (!plan || !plan.task || plan.task === live.lastSentText) continue;
-    // 1) before:动手前先把观众视角移到相关位置
+    if (!plan || !plan.task) continue;
+    const taskText = (plan.action === "create" ? "【新建】" : (plan.page ? "【改造 " + plan.page + "】" : "【改造】")) + plan.task;
+    if (taskText === live.lastSentText) continue;
+    const same = live.focus && live.focus.action === plan.action && (live.focus.page || "") === (plan.page || "");
+    live.focus = { action: plan.action, page: plan.page, title: plan.title || (same && live.focus.title) || "", rounds: same ? (live.focus.rounds || 1) + 1 : 1, at: Date.now() };
+    console.log("[live] 空闲自动创作[" + (plan.action === "create" ? "新建" : "改造 " + (plan.page || "")) + "] 聚焦第", live.focus.rounds, "轮:", plan.task);
+    // 1) before:先把观众视角切到相关页面/位置
     if (plan.before && SITE_CMD_ENABLED) { fireSite(plan.before); await sleep(1500); }
-    // 2) task:交给 AI 做
-    console.log("[live] 空闲自动创作任务:", plan.task);
-    const ok = await injectTop({ text: plan.task, votes: 1, voters: [] }, "auto");
+    // 2) task:交给 AI 做(带上目标页/动作)
+    const ok = await injectTop({ text: taskText, votes: 1, voters: [] }, "auto");
     if (!ok) continue;
     count++;
     // 3) 等这轮跑完
     await waitIdle(180000);
-    // 4) after:移过去让观众看到效果
+    // 4) after:切过去让观众看到效果
     if (plan.after && SITE_CMD_ENABLED) { fireSite(plan.after); await sleep(1500); }
     live.lastInjectAt = Date.now();
     changed();

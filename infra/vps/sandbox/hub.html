@@ -219,7 +219,9 @@
   // ---- 观众「网站操作」:只作用于预览 iframe(#f-site),不碰会话/系统 ----
   function applySite(site) {
     var f = document.getElementById("f-site");
-    var w = f && f.contentWindow, d = w && w.document;
+    if (!f) return;
+    if (site.type === "goto" && site.path) { f.src = "/preview/" + site.path + "?t=" + Date.now(); return; }
+    var w = f.contentWindow, d = w && w.document;
     if (!w || !d) return;
     try {
       if (site.type === "scroll") {
