@@ -1244,6 +1244,18 @@ function siteVote(cmd, channelId) {
   if (!live.siteFirstAt) live.siteFirstAt = Date.now();
   vote(opt, channelId);
 }
+// AI(自动创作)的页面操作并入票池:来源=自动、1 票起步;观众可见,可投票顶掉/改选,按票首执行
+function enqueueSiteAuto(cmd) {
+  const key = siteKey(cmd);
+  let opt = live.options.find((o) => o.kind === "site" && o.norm === key);
+  if (!opt) {
+    opt = { id: newOptId(), text: siteLabel(cmd), norm: key, kind: "site", cmd: JSON.stringify(cmd), votes: 1, voters: ["auto"], src: "auto", createdAt: Date.now() };
+    live.options.push(opt);
+  }
+  if (!live.siteFirstAt) live.siteFirstAt = Date.now();
+  console.log("[live] 页面操作并入票池:", opt.text, JSON.stringify(cmd));
+  changed();
+}
 async function siteTick() {
   if (!SITE_CMD_ENABLED) return;
   const sites = live.options.filter((o) => o.kind === "site");
@@ -1254,6 +1266,7 @@ async function siteTick() {
   let cmd = {};
   try { cmd = JSON.parse(top.cmd || "{}"); } catch {}
   live.site = { seq: (live.siteSeq = (live.siteSeq || 0) + 1), ...cmd };
+  if (cmd.type === "goto" && cmd.path) live.page = cmd.path; // 仅记录观众当前在哪页(供模型参考)
   live.executed.push({ round: live.round, text: top.text, votes: top.votes, src: top.src || "?", at: Date.now(), status: "done" });
   if (live.executed.length > 200) live.executed = live.executed.slice(-200);
   live.options = live.options.filter((o) => o !== top); // 执行后从票池移除该条
@@ -1633,16 +1646,16 @@ async function autoCreateLoop() {
     const same = live.focus && live.focus.action === plan.action && (live.focus.page || "") === (plan.page || "");
     live.focus = { action: plan.action, page: plan.page, title: plan.title || (same && live.focus.title) || "", rounds: same ? (live.focus.rounds || 1) + 1 : 1, at: Date.now() };
     console.log("[live] 空闲自动创作[" + (plan.action === "create" ? "新建" : "改造 " + (plan.page || "")) + "] 聚焦第", live.focus.rounds, "轮:", plan.task);
-    // 1) before:先把观众视角切到相关页面/位置
-    if (plan.before && SITE_CMD_ENABLED) { fireSite(plan.before); await sleep(1500); }
+    // 1) before:先把观众视角切到相关页面/位置 —— 并入票池(kind:site),观众可见,按 SITE_VOTE_MS 用票首执行
+    if (plan.before && SITE_CMD_ENABLED) { enqueueSiteAuto(plan.before); await sleep(SITE_VOTE_MS + 1500); }
     // 2) task:交给 AI 做(带上目标页/动作)
     const ok = await injectTop({ text: taskText, votes: 1, voters: [] }, "auto");
     if (!ok) continue;
     count++;
     // 3) 等这轮跑完
     await waitIdle(180000);
-    // 4) after:切过去让观众看到效果
-    if (plan.after && SITE_CMD_ENABLED) { fireSite(plan.after); await sleep(1500); }
+    // 4) after:切过去让观众看到效果 —— 同样并入票池(观众可见/可投票)
+    if (plan.after && SITE_CMD_ENABLED) enqueueSiteAuto(plan.after);
     live.lastInjectAt = Date.now();
     changed();
   }
