@@ -10,7 +10,7 @@
 //
 // 只用 node 内置模块,无依赖;node 是官方 opencode 镜像自带的运行时。
 import { createServer, request as httpRequest } from "node:http";
-import { stat, readFile, mkdir, writeFile, rename, readdir } from "node:fs/promises";
+import { stat, readFile, mkdir, writeFile, rename, readdir, access } from "node:fs/promises";
 import { createReadStream, appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { extname, join, resolve, sep } from "node:path";
@@ -1569,6 +1569,8 @@ async function proposePlan() {
     if (f && rounds < AUTO_FOCUS_MIN) { action = f.action || action; if (f.action === "improve" && f.page) page = f.page; }
     // 页面名兜底:从 task 里解析 *.html
     if (!page) { const mm = task.match(/([a-zA-Z0-9_-]+\.html)/); if (mm) page = mm[1]; }
+    // 要改的页面不存在(网站被还原/删除)→ 改为从零新建,别改不存在的页面
+    if (action === "improve" && (!page || !pages.some((p) => p.file === page))) { console.log("[live] 目标页不存在,改为新建:", page || "(空)"); action = "create"; }
     // 不依赖模型给的 before/after:据 action+page 自己推导 goto,确保一定切到目标页
     let before = sanitizeSite(o && o.before);
     let after = sanitizeSite(o && o.after);
@@ -1600,6 +1602,12 @@ async function autoCreateLoop() {
     if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) continue;
     if (AUTO_CREATE_MAX > 0 && count >= AUTO_CREATE_MAX) continue;
     if (Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue;
+    // 聚焦指向的页面已被删除/还原 → 丢弃聚焦,重新选题(否则会一直改一个不存在的页面)
+    if (live.focus && live.focus.action === "improve" && live.focus.page) {
+      let exists = true;
+      try { await access(join(WORKSPACE, live.focus.page)); } catch { exists = false; }
+      if (!exists) { console.log("[live] 聚焦页面已不存在,丢弃聚焦 →", live.focus.page); live.focus = null; }
+    }
     const plan = await proposePlan();
     if (!plan || !plan.task) continue;
     const taskText = (plan.action === "create" ? "【新建】" : (plan.page ? "【改造 " + plan.page + "】" : "【改造】")) + plan.task + (AUTO_WEB ? "（可先联网检索、参考当下流行玩法/设计再动手）" : "");
@@ -2054,7 +2062,8 @@ async function handleAdmin(req, res) {
   const action = body.action;
   if (action === "start") live.autoDirect = true;
   else if (action === "pause") live.autoDirect = false;
-  else if (action === "reset") live.options = [];
+  else if (action === "reset") { live.options = []; live.focus = null; }
+  else if (action === "reset-all") { live.options = []; live.executed = []; live.focus = null; live.questionVote = null; live.blocked = null; }
   else if (action === "clear-executed") live.executed = [];
   else if (action === "add") handleChat(String(body.text || ""), String(body.channel || "admin"), String(body.name || ""));
   else if (action === "send") { const t = topOption(); if (t) await injectTop(t); }

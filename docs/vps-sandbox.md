@@ -429,7 +429,7 @@ Xvfb(虚拟屏 1280x720)
 | `GET /board` | 直播投票榜页（实时票榜 + 已实行；`?embed=1` 供工作台内嵌） |
 | `GET /__lb/state` | 当前状态 JSON（轮次/会话/票榜/已实行/开关） |
 | `GET /__lb/events` | 状态 SSE（榜单毫秒级刷新） |
-| `POST /__lb/admin` | 管理：`start`/`pause`/`reset`/`send`/`clear-executed`/`add`；请求头 `x-admin-token` |
+| `POST /__lb/admin` | 管理：`start`/`pause`/`reset`（清票池+聚焦）/`reset-all`（清票池+已执行+聚焦+提问）/`send`/`clear-executed`/`add`；请求头 `x-admin-token` |
 
 **弹幕源**：`CHAT_SOURCE=youtube|bilibili|off`（留空则按已配置的凭据自动选）。
 
