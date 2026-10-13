@@ -575,7 +575,7 @@ let live = {
   questionVote: null, // 问题投票状态机(逐题)
   site: null, // 最近一次下发的网站操作 {seq,type,...}
   siteSeq: 0,
-  page: null, // 观众当前展示的页面(最近一次 goto 的结果;仅作提示喂给模型,不做任何强制)
+  page: "index.html", // 观众当前展示的页面(默认=首页;每次 goto 更新;仅作提示喂给模型,不做任何强制)
   siteFirstAt: null,
   focus: null, // 自动创作聚焦 { action, page, title, rounds }
   guide: null, // { examples:[...], at }
@@ -594,7 +594,7 @@ async function loadLive() {
       live.lastSentText = d.lastSentText || null;
       live.lastInjectAt = Number(d.lastInjectAt) || 0;
       live.focus = d.focus && typeof d.focus === "object" ? d.focus : null;
-      live.page = typeof d.page === "string" ? d.page : null;
+      if (typeof d.page === "string") live.page = d.page;
       live.currentRun = [...live.executed].reverse().find((e) => e && e.status === "running") || null;
       live.audience = (d.audience && typeof d.audience === "object") ? d.audience : {};
     }
