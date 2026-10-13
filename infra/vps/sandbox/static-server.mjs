@@ -1572,6 +1572,8 @@ async function proposePlan() {
     if (!page) { const mm = task.match(/([a-zA-Z0-9_-]+\.html)/); if (mm) page = mm[1]; }
     // 要改的页面不存在(网站被还原/删除)→ 改为从零新建,别改不存在的页面
     if (action === "improve" && (!page || !pages.some((p) => p.file === page))) { console.log("[live] 目标页不存在,改为新建:", page || "(空)"); action = "create"; }
+    // 空站(只剩一个起步 index)→ 强制从零 create:此时没有东西可「改造」
+    if (pages.length <= 1 && action !== "create") { console.log("[live] 空站 → 强制从零新建(无内容可改造)"); action = "create"; page = ""; }
     // 不依赖模型给的 before/after:据 action+page 自己推导 goto,确保一定切到目标页
     let before = sanitizeSite(o && o.before);
     let after = sanitizeSite(o && o.after);
