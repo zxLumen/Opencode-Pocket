@@ -21,6 +21,9 @@
   （`fetch('api/scores')`，而不是 `fetch('/api/scores')`——绝对路径会撞上 opencode）。
 - 后端要**常驻**：用 `nohup node server.js > /tmp/app.log 2>&1 &` 后台启动
   （前台跑会被工具超时杀掉）。改完代码记得重启它。
+- **真实观众名**：沙盒会采集直播间观众的真实用户名。网站前端可 `fetch('__audience.json')`
+  （→ `/preview/__audience.json`）拿到 `{list:[{name,votes,at}]}`；同样内容也在 `/workspace/audience.json`。
+  需要展示观众昵称时用这个数据源。
 - **部署/重启后自动恢复**：把后端**启动命令写一行到 `/workspace/.sandbox-backend`**
   （例如 `node server.js` 或 `node launch.js`）。沙盒辅助服务会常驻检查 `8000` 端口，
   容器重建（部署）或后端崩溃后**自动按该命令重新拉起**；没有该文件时会依次尝试

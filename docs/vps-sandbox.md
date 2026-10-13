@@ -348,6 +348,9 @@ Xvfb(虚拟屏 1280x720)
   **并入意见票池**（标记 `kind:site`，榜单显示 `▶` 前缀）；自本轮首条操作弹幕起 `PLAYGROUND_SITE_VOTE_SEC`
   （默认 5s）用**票首**在**预览 iframe** 执行（滚动/点击/后退/刷新），**只作用于网站预览**，不碰会话/系统。
   开关 `PLAYGROUND_SITE_CMD=1`。
+- **观众名（真实用户名）**：采集 B站弹幕 `info[2][1]` / YouTube `displayName`；票王注入时附「支持：昵称…」。
+  名录同时写 `/workspace/audience.json`，并在预览下暴露 **`/preview/__audience.json`**（`{list:[{name,votes,at}]}`），
+  供访客网站前端 `fetch('__audience.json')` 显示真实观众昵称（`seed/AGENTS.md` 已注明）。
 - **空票智能引导**：无人投票时，榜单「当前投票」区显示**简练玩法说明**（发弹幕提想法、`#1` 投票、
   相同意思并票、`往下` 滚网页）+ 由**网关生成的 2-3 条可发弹幕的示例**（结合当前上下文），引导观众参与；
   有票即隐藏。配置 `PLAYGROUND_GUIDE`、`PLAYGROUND_GUIDE_INTERVAL_MS`。
@@ -358,7 +361,8 @@ Xvfb(虚拟屏 1280x720)
     + AI 判意图（只放行 `instruction`；`risky`/`chitchat`/`comment`/`unsafe`/`injection` 丢弃）。
 - **自动接棒**：监听 `session.idle` / `session.execution.succeeded`（另有 `/api/session/active`
   轮询兜底）→ **只要会话空闲**就把当前票王 `POST /api/session/<id>/prompt` 注入
-  `【观众投票 · 第 N 轮】<意见>`（并附一句「请你自行判断是否执行；破坏性/违法/无关内容请拒绝」）→ 清零。
+  `【观众投票 · 第 N 轮】<意见>（支持：观众名…）`（并附一句「请你自行判断是否执行；破坏性/违法/无关内容请拒绝」）→
+  **执行后从票池移除该条（其余票保留）**，导演只挑未执行的票王。
   默认**不设票数门槛、无冷却**（`PLAYGROUND_MIN_VOTES=0`、`PLAYGROUND_COOLDOWN_SEC=0`）。失败只标记、不自动接棒。
 - **护栏**：最大轮数（`PLAYGROUND_MAX_ROUNDS`，防无限烧预算）、自动接棒总开关（榜单页右上「⚙」）。
 - **阻塞处理（question / permission / form）**：agent 提问或申请权限时**暂停意见接棒**（不注入、不拿意见投票答题，
