@@ -230,11 +230,24 @@
         if (d.documentElement) d.documentElement.scrollTop += dy;
         if (d.body) d.body.scrollTop += dy;
       } else if (site.type === "click") {
-        var t = String(site.text || "");
-        var els = d.querySelectorAll("a,button,[role=button],input[type=button],input[type=submit],li,div,span,label");
-        for (var i = 0; i < els.length; i++) {
-          var txt = (els[i].textContent || "").trim();
-          if (txt && t && (txt === t || txt.indexOf(t) >= 0)) { els[i].click(); break; }
+        var t = String(site.text || "").trim();
+        if (t) {
+          // 挑最像"可点按钮"的那个:优先 button/a/[role=button]、文字完全相等、文字最短(避免点到外层容器 div)
+          var all = d.querySelectorAll("button,a,[role=button],input[type=button],input[type=submit],li,label,div,span");
+          var best = null, bestScore = -1e9;
+          for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            var txt = (el.textContent || "").trim();
+            if (!txt || txt.indexOf(t) < 0) continue;
+            var tag = el.tagName.toLowerCase();
+            var clickable = (tag === "button" || tag === "a" || el.getAttribute("role") === "button" || (tag === "input" && /button|submit/i.test(el.type || ""))) ? 1 : 0;
+            var score = (txt === t ? 100 : 0) + clickable * 50 - Math.min(txt.length, 300) / 10;
+            if (score > bestScore) { bestScore = score; best = el; }
+          }
+          if (best) {
+            try { best.scrollIntoView({ block: "center" }); } catch (e) {}
+            try { best.click(); } catch (e) {}
+          }
         }
       } else if (site.type === "back") { w.history.back(); }
       else if (site.type === "reload") { f.src = f.src; }

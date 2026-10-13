@@ -487,6 +487,16 @@ async function servePreview(req, res, pathname, search) {
     try { st = await stat(target); } catch {}
     if (st && st.isFile()) return serveFile(req, res, target);
     if (st && st.isDirectory()) {
+      // 根路径 /preview/ 跟随「当前展示页」:会话改文件触发的重载/刷新会回到正在改的那一页,而不是首页
+      const isRoot = pathname === "/preview" || pathname === "/preview/";
+      if (isRoot && live.page) {
+        const cur = resolve(join(WORKSPACE, live.page));
+        if (cur !== WORKSPACE && cur.startsWith(WORKSPACE + sep)) {
+          let sc = null;
+          try { sc = await stat(cur); } catch {}
+          if (sc && sc.isFile()) return serveFile(req, res, cur);
+        }
+      }
       const idx = join(target, "index.html");
       let st2 = null;
       try { st2 = await stat(idx); } catch {}
@@ -576,6 +586,7 @@ let live = {
   site: null, // 最近一次下发的网站操作 {seq,type,...}
   siteSeq: 0,
   page: "index.html", // 观众当前展示的页面(默认=首页;每次 goto 更新;仅作提示喂给模型,不做任何强制)
+  lastViewOp: null, // 最近一次"观众视角校验"补的操作 {key,at}(去重,避免反复补同一个)
   siteFirstAt: null,
   focus: null, // 自动创作聚焦 { action, page, title, rounds }
   guide: null, // { examples:[...], at }
@@ -633,6 +644,7 @@ function publicState() {
     blocked: live.blocked,
     question: qvPublic(),
     site: live.site || null,
+    page: live.page || null,
     focus: live.focus || null,
     active: live.options.length,
     guide: (!live.options.length && !live.questionVote && live.guide) ? { examples: live.guide.examples } : null,
@@ -1696,6 +1708,7 @@ async function autoCreateLoop() {
     live.focus = { action: plan.action, page: plan.page, title: plan.title || (same && live.focus.title) || "", rounds: same ? (live.focus.rounds || 1) + 1 : 1, at: Date.now() };
     console.log("[live] 空闲自动创作[" + (plan.action === "create" ? "新建" : "改造 " + (plan.page || "")) + "] 聚焦第", live.focus.rounds, "轮:", plan.task, "| before=" + JSON.stringify(plan.before || null) + " after=" + JSON.stringify(plan.after || null));
     // 1) before:先把观众视角切到相关页面/位置 —— 并入票池(kind:site),观众可见,按 SITE_VOTE_MS 用票首执行
+    if (plan.action === "improve" && plan.page) live.page = plan.page; // 整轮都展示目标页(中途重载也回它)
     if (plan.before && SITE_CMD_ENABLED) { enqueueSiteAuto(plan.before); await sleep(SITE_VOTE_MS + 1500); }
     // 2) task:交给 AI 做(带上目标页/动作)
     const ok = await injectTop({ text: taskText, votes: 1, voters: [] }, "auto");
@@ -1705,12 +1718,15 @@ async function autoCreateLoop() {
     await waitIdle(180000);
     // 4) after:切过去让观众看到效果 —— 同样并入票池(观众可见/可投票)
     if (plan.after && SITE_CMD_ENABLED) enqueueSiteAuto(plan.after);
-    // 5) 观众视角校验:做完操作后再"看一眼"当前这一屏是否达标;不达标就补操作(最多 2 次)
-    for (let k = 0; k < 2; k++) {
+    // 5) 观众视角校验:做完操作后再"看一眼"当前这一屏是否达标;不达标补 1 次(同一操作近期不重复发)
+    for (let k = 0; k < 1; k++) {
       await sleep(SITE_VOTE_MS + 1500);
       if (!SITE_CMD_ENABLED) break;
       const op = await verifyView(plan.task, plan.page || live.page);
       if (!op) break;
+      const key = JSON.stringify(op);
+      if (live.lastViewOp && live.lastViewOp.key === key && Date.now() - live.lastViewOp.at < 180000) { console.log("[live] 观众视角校验:同一操作近期已执行,跳过"); break; }
+      live.lastViewOp = { key: key, at: Date.now() };
       enqueueSiteAuto(op);
     }
     live.lastInjectAt = Date.now();
@@ -1834,8 +1850,8 @@ function handleSessionEvent(ev) {
     const d = ev.data || {};
     const a = d.agent || ev.agent;
     if (a && (!d.sessionID || d.sessionID === SESSION_ID)) {
+      if (a !== live.agent) live.lastSentText = null; // 只有真的换了模式才清(否则同一任务会被反复重发)
       live.agent = a;
-      live.lastSentText = null; // 切模式后,同一句再投不再判重
       broadcastLive();
     }
   }
