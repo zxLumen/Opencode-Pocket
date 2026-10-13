@@ -517,6 +517,9 @@ const LIVE_ENABLED = process.env.PLAYGROUND_LIVE !== "0";
 const MIN_VOTES = Number(process.env.PLAYGROUND_MIN_VOTES || 0); // 默认 0 = 不设票数门槛
 const COOLDOWN_MS = Number(process.env.PLAYGROUND_COOLDOWN_SEC || 0) * 1000; // 默认 0 = 无冷却
 const MAX_ROUNDS = Number(process.env.PLAYGROUND_MAX_ROUNDS || 0); // 0 = 不限
+// 卡死兜底:某些中断(SSE 断流 / run 僵死)会让 opencode 一直报 running,导致后续票王永不接棒。
+// 这里在「running 且长时间无任何会话活动」时主动 interrupt 并放行(默认 6 分钟,可调)。
+const STUCK_MS = Number(process.env.PLAYGROUND_STUCK_SEC || 360) * 1000;
 // 弹幕审核:规则 + AI 意图/风控;只有「给沙盒的明确指令」才进投票
 const MODERATE = process.env.PLAYGROUND_MODERATE === "1"; // 默认关闭:弹幕侧不过滤,交给模型判断
 const MODERATE_MODE = String(process.env.PLAYGROUND_MODERATE_MODE || "both").toLowerCase(); // both|rules|llm|off
@@ -556,6 +559,7 @@ let live = {
   executed: [], // { round, text, votes, at, status: running|done|failed }
   lastSentText: null,
   lastInjectAt: 0,
+  lastActivityAt: 0, // 最近一次「会话事件」时间(SSE);用于卡死兜底判定
   currentRun: null,
   session: "unknown",
   agent: null, // 当前 agent 模式(plan/build),由事件/我方代切维护
@@ -630,6 +634,8 @@ function publicState() {
     leader,
     executed: live.executed.slice(-40).reverse(),
     lastInjectAt: live.lastInjectAt,
+    runAt: live.currentRun ? live.currentRun.at : live.lastInjectAt, // 当前轮开始时间(板子显示已耗时)
+    stuckSec: Math.round(STUCK_MS / 1000), // 卡死兜底阈值(超过则自动中断接棒)
   };
 }
 function broadcastLive() {
@@ -1414,6 +1420,7 @@ async function injectTop(top) {
   live.currentRun = entry;
   live.lastSentText = top.text;
   live.lastInjectAt = entry.at;
+  live.lastActivityAt = entry.at;
   live.session = "running";
   live.round += 1;
   live.options = live.options.filter((o) => o !== top); // 执行后从票池移除该条(其余保留)
@@ -1455,9 +1462,12 @@ function handleSessionEvent(ev) {
   const d = ev.data || {};
   const sid = d.sessionID || d.sessionId || d.session;
   if (sid && sid !== SESSION_ID) return;
+  live.lastActivityAt = Date.now(); // 任何会话事件都算「有活动」
   if (t === "session.execution.started" || t === "session.step.started") {
     if (live.session !== "running") { live.session = "running"; broadcastLive(); }
-  } else if (t === "session.idle" || t === "session.execution.succeeded") {
+  } else if (t === "session.idle" || t === "session.execution.succeeded" || t === "session.execution.interrupted") {
+    // interrupted(用户 ESC / 超时 / 被取代 / 长时间无活动)也要当作「本轮结束」——否则会话卡在 running,
+    // 后续票王永远不接棒(实测踩过 40+ 分钟)。
     onFinishedEvent();
   } else if (t === "session.execution.failed" || t === "session.error") {
     onFailedEvent();
@@ -1530,6 +1540,38 @@ async function sessionPollLoop() {
       }
     } catch {}
     await sleep(4000);
+  }
+}
+// 卡死兜底:opencode 偶尔会「run 其实已死但仍报 running」(SSE 断流 / 僵死 tool 状态),
+// 导致 live.session 永远停在 running、后续票王永不接棒(实测踩过 40+ 分钟)。
+// 这里在「running 且长时间(默认 6 分钟)无任何会话活动」时,主动 interrupt 清掉僵死 run,
+// 再强制放行并接下一棒。
+// 强制接棒:清掉僵死/中断的 run,放行并接下一棒(看门狗与 admin「强制接棒」共用)。
+async function forceRelay(reason) {
+  try {
+    await upstreamFetch("/api/session/" + encodeURIComponent(SESSION_ID) + "/interrupt", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    });
+  } catch (e) { console.error("[live] interrupt 失败:", (e && e.message) || e); }
+  finishRun("timeout");
+  if (live.session !== "idle") { live.session = "idle"; broadcastLive(); }
+  live.lastActivityAt = Date.now();
+  console.warn("[live] 强制接棒:", reason);
+  maybeInject();
+}
+async function watchdogLoop() {
+  for (;;) {
+    try {
+      if (LIVE_ENABLED && live.autoDirect && !live.blocked && live.session === "running") {
+        const last = Math.max(live.lastActivityAt || 0, live.lastInjectAt || 0);
+        if (last && Date.now() - last > STUCK_MS) {
+          const mins = Math.round((Date.now() - last) / 60000);
+          await forceRelay("疑似卡死(已 " + mins + " 分钟无会话活动)");
+        }
+      }
+    } catch (e) { console.error("[live] watchdog:", (e && e.message) || e); }
+    await sleep(30000);
   }
 }
 // ---------- B 站直播弹幕(WebSocket 二进制协议;零依赖) ----------
@@ -1698,7 +1740,7 @@ function startLive() {
   if (CHAT_SOURCE === "bilibili") biliLoop();
   else if (CHAT_SOURCE === "youtube") ytLoop();
   else console.log("[live] 未配置弹幕源(YT_API_KEY/YT_VIDEO_ID 或 BILI_ROOM_ID)");
-  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); guideLoop(); audienceLoop(); sessionEventLoop(); sessionPollLoop();
+  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); guideLoop(); audienceLoop(); sessionEventLoop(); sessionPollLoop(); watchdogLoop();
   console.log("[live] 直播投票已启动: 轮次=", live.round, "自动接棒=", live.autoDirect, "最小票数=", MIN_VOTES, "自动合并=", MERGE_ENABLED);
   setTimeout(maybeInject, 5000); // 重启后若已有票且会话空闲,补接一轮
 }
@@ -1747,6 +1789,7 @@ async function handleAdmin(req, res) {
   else if (action === "clear-executed") live.executed = [];
   else if (action === "add") handleChat(String(body.text || ""), String(body.channel || "admin"), String(body.name || ""));
   else if (action === "send") { const t = topOption(); if (t) await injectTop(t); }
+  else if (action === "force") await forceRelay("admin 手动"); // 强制接棒(清僵尸 run)
   else return json(res, { ok: false, error: "unknown action" });
   changed();
   return json(res, { ok: true, state: publicState() });

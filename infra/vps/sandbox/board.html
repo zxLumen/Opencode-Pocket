@@ -121,6 +121,7 @@
     <button data-act="start">开始接棒</button>
     <button data-act="pause">暂停接棒</button>
     <button data-act="send">立即发送票王</button>
+    <button data-act="force">强制接棒</button>
     <button data-act="reset">清空本轮票</button>
     <button data-act="clear-executed">清空已实行</button>
     <span class="note">令牌存本机,只在本页用</span>
@@ -153,6 +154,7 @@
   var last = null;
 
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); }
+  function mins(from) { return from ? Math.max(0, Math.floor((Date.now() - from) / 60000)) : 0; }
 
   function render(st) {
     if (!st) return;
@@ -166,7 +168,8 @@
       dot.className = "dot" + (on ? " on" : (bad ? " bad" : ""));
       el.querySelector("span:last-child").textContent = label;
     }
-    pill("p-session", st.session === "running", st.session === "running" ? "会话 运行中" : (st.session === "idle" ? "会话 空闲" : "会话 …"));
+    var runMins = st.session === "running" ? mins(st.runAt || st.lastInjectAt) : 0;
+    pill("p-session", st.session === "running", st.session === "running" ? ("会话 运行中" + (runMins >= 1 ? " " + runMins + "m" : "")) : (st.session === "idle" ? "会话 空闲" : "会话 …"));
     var srcName = { youtube: "YouTube", bilibili: "B站", off: "无源" }[st.chat.source] || st.chat.source;
     var chatLabel = !st.chat.enabled ? "弹幕 未配置" : ("弹幕 " + srcName + (st.chat.connected ? " 已连接" : " 连接中") + (st.chat.loggedIn ? " ·登录" : ""));
     pill("p-yt", st.chat.connected, chatLabel, st.chat.enabled && !!st.chat.error);
@@ -197,7 +200,8 @@
     var ex = $("executed");
     if (!st.executed || !st.executed.length) ex.innerHTML = '<div class="empty">暂无</div>';
     else ex.innerHTML = st.executed.slice(0, 8).map(function (r) {
-      var label = { running: "执行中", done: "已完成", failed: "失败" }[r.status] || r.status;
+      var label = { running: "执行中", done: "已完成", failed: "失败", timeout: "已中断" }[r.status] || r.status;
+      if (r.status === "running") { var m = mins(r.at); if (m >= 1) label += " " + m + "m"; }
       return '<div class="run"><span class="rn">#' + r.round + '</span>' +
         '<span class="rt" title="' + esc(r.text) + '">' + esc(r.text) + '</span>' +
         '<span class="rs ' + r.status + '">' + label + '</span></div>';
@@ -240,6 +244,7 @@
   } catch (err) {}
   setInterval(function () { if (!es || es.readyState !== 1) load(); }, 3000);
   setInterval(function () { if (last && last.question) render(last); }, 1000); // 倒计时本地走秒
+  setInterval(function () { if (last && last.session === "running" && !last.question) render(last); }, 5000); // 运行中刷新「已耗时」
 
   // ---- 管理 ----
   var tokenEl = $("token");
