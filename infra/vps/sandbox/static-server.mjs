@@ -561,7 +561,7 @@ const AUTO_CREATE_MS = Number(process.env.PLAYGROUND_AUTO_CREATE_INTERVAL_SEC ||
 const AUTO_CREATE_MAX = Number(process.env.PLAYGROUND_AUTO_CREATE_MAX || 0); // 0 = 不限
 const AUTO_FOCUS_MIN = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MIN || 3)); // 聚焦最少停留轮数
 const AUTO_FOCUS_MAX = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MAX || 6)); // 聚焦软上限(到点建议换)
-const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "有技术含量、能学到东西的作品:算法/数据结构可视化、AI·机器学习演示(含训练过程)、WebGL/3D 与物理仿真、生成艺术/程序化音乐、数据可视化仪表盘、实用工具(编辑器/转换器/分析器)、交互式科普/教程";
+const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "平民化、便民的小工具(纯前端、手机也能用):图片压缩·格式转换·加水印、二维码生成、单位/汇率/房贷/个税/AA分账计算器、日期倒计时与时区、文本工具(字数·去重·JSON格式化·正则测试)、密码生成、随机抽签点名、配色渐变生成、简易记账/待办(本地存储)、简历/请假条/收据生成、大字版老人友好工具";
 const AUTO_WEB = process.env.PLAYGROUND_AUTO_WEB !== "0"; // 允许在任务里提示 agent 先联网找灵感
 const YT_API_KEY = process.env.YT_API_KEY || "";
 const YT_VIDEO_ID = (process.env.YT_VIDEO_ID || "").trim();
@@ -1761,8 +1761,9 @@ async function proposePlan() {
     const sys = "你是无人值守的直播导演,站在【观众视角】安排下一轮(观众只能看到右侧预览的一屏)。\n" +
       "【动作二选一】improve=挑一个现有页面做**有创意**的升级(优先新玩法/交互/可视化,少做纯样式微调);create=**从零做一个全新的东西**(新页面/新玩法/新工具),并在首页加入口。\n" +
       "【创作取向】优先:" + AUTO_STYLE + "。\n" +
-      "【拒绝奶头乐,重要】**不要**做「点击得分/接住/躲避/跑酷/打怪/连连看」这类纯消遣小游戏,也不要只堆粒子特效刷屏。要做**有技术含量、有信息量、能学到东西**的东西(见上方创作取向);宁可做一个小而深的工具/可视化,也不要再做第 N 个换皮小游戏。\n" +
-      "【首页结构,重要】首页 index.html **只主推「有技术含量」的作品**(大卡片/大图);所有**小游戏/消遣类**统一收进一个**二级入口**「🎮 小游戏合集」(arcade.html),首页只放一个小按钮链到它。**以后新做的小游戏都加到合集页,不占首页主位**。所有旧页面都保留,不要删除。\n" +
+      "【拒绝奶头乐,重要】**不要**做「点击得分/接住/躲避/跑酷/打怪/连连看」这类纯消遣小游戏,也不要只堆粒子特效刷屏。\n" +
+      "【便民优先,重要】优先做**平民化、便民**的实用小工具(见上方创作取向):输入→输出/下载,**打开就能用、手机也能用**;要有**默认示例**让人一眼看懂(直播时自动用示例演示一遍)。宁可做一个小而实用的工具,也不要再做花哨的演示。\n" +
+      "【首页结构,重要】首页 index.html 是**「便民工具箱」**:按类别分组(图片/计算/文本/时间/生活)展示**便民小工具**的大卡片;小游戏/演示类统一收进**二级入口**「🎮 小游戏合集」(arcade.html),首页只放一个小按钮链到它。所有旧页面都保留,不要删除。\n" +
       "【避免重复】不要与『现有页面』里已有的功能、或『最近已做』重复;重复度高的点子直接弃用,换别的。\n" +
       "【避免失败】不要重复『失败过』里的做法;换更简单、更可能一次做成的实现。\n" +
       "【受众信号】参考『观众投过的』哪些方向受欢迎。\n" +
