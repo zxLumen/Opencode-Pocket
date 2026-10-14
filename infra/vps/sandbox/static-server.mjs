@@ -657,7 +657,8 @@ async function judgePage(page) {
     return noShow;
   } catch { return false; }
 }
-const AUTO_MAX_PER_HOUR = Math.max(0, Number(process.env.PLAYGROUND_AUTO_MAX_PER_HOUR || 4)); // 自动创作限流:每小时最多几轮(0=不限)
+const AUTO_MAX_PER_HOUR = Math.max(0, Number(process.env.PLAYGROUND_AUTO_MAX_PER_HOUR || 0)); // 自动创作限流:每小时最多几轮(0=不限;默认关)
+const AUTO_MIN_INTERVAL_MS = Number(process.env.PLAYGROUND_AUTO_MIN_INTERVAL_SEC || 1200) * 1000; // 自动创作两轮之间最小间隔(默认 20 分钟)
 const FOLLOWUP_MAX = Math.max(1, Number(process.env.PLAYGROUND_FOLLOWUP_ROUNDS || 6)); // 观众提了方向后,自动开发"沿着它辅助"的轮数 // 每轮跑完留给观众"看结果"的停顿(期间不接新任务)
 const AUTO_PROJECT = (process.env.PLAYGROUND_AUTO_PROJECT || "").trim(); // 常驻大项目:自动创作长期服务于它
 const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "生活化便民(吃穿住行玩买/健康/家庭),并接入外部平台:本地生活(附近吃喝玩乐·外卖·团购)、购物比价与优惠(淘宝/京东/拼多多)、出行(高德/百度地图·公交地铁·打车·12306)、天气与空气质量、生活缴费与快递查询、健康与用药提醒、家庭记账/菜谱/纪念日、招聘租房";
@@ -2126,8 +2127,13 @@ async function autoCreateLoop() {
     if (live.session !== "idle") continue;
     if (live.injecting) continue;
     if (live.options.some((o) => o.kind !== "auto")) continue; // 有观众票 → 让位,不抢
-    // 限流:自动创作每小时最多 AUTO_MAX_PER_HOUR 轮(省 token)
+    // 限流:自动创作两轮之间至少 AUTO_MIN_INTERVAL_MS(默认 20 分钟;省 token)
     live.autoTimes = (live.autoTimes || []).filter((t) => Date.now() - t < 3600 * 1000);
+    const lastAuto = live.autoTimes.length ? live.autoTimes[live.autoTimes.length - 1] : 0;
+    if (AUTO_MIN_INTERVAL_MS > 0 && lastAuto && Date.now() - lastAuto < AUTO_MIN_INTERVAL_MS) {
+      if (Date.now() - (live.lastRateLogAt || 0) > 120000) { live.lastRateLogAt = Date.now(); console.log("[live] 自动创作间隔未到:距上轮", Math.round((Date.now() - lastAuto) / 60000), "分钟(需", Math.round(AUTO_MIN_INTERVAL_MS / 60000), "分钟)"); }
+      continue;
+    }
     if (AUTO_MAX_PER_HOUR > 0 && live.autoTimes.length >= AUTO_MAX_PER_HOUR) {
       if (Date.now() - (live.lastRateLogAt || 0) > 60000) { live.lastRateLogAt = Date.now(); console.log("[live] 自动创作限流:最近 1 小时已", live.autoTimes.length, "轮(上限", AUTO_MAX_PER_HOUR, "),暂不接棒"); }
       continue;
