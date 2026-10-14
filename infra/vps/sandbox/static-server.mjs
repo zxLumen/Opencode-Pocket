@@ -2150,17 +2150,29 @@ function maybeInject() {
   injectTop(top);
 }
 let finishedTimer = null;
-// 跑完后把观众"带去看结果":找最近被改动的 .html 并切过去
-async function showLatestPage() {
+// 跑完后把观众"精确带到改动处":①页面(任务里写了用任务里的,否则用最近改动的)②位置(任务里提到顶部/底部→附加滚动)
+async function showLatestPage(taskText) {
   if (!SITE_CMD_ENABLED) return;
   try {
-    const files = (await readdir(WORKSPACE)).filter((f) => f.endsWith(".html"));
-    let best = null, bt = 0;
-    for (const f of files) { try { const st = await stat(join(WORKSPACE, f)); if (st.mtimeMs > bt) { bt = st.mtimeMs; best = f; } } catch {} }
-    if (!best || Date.now() - bt > 5 * 60 * 1000) return; // 太旧就不切
-    if (best === live.page) return;
-    console.log("[live] 让观众看结果 →", best);
-    enqueueSiteAuto({ type: "goto", path: best });
+    const t = String(taskText || "");
+    let page = (t.match(/([A-Za-z0-9_-]+\.html)/) || [])[1] || "";
+    if (page) { try { const st = await stat(join(WORKSPACE, page)); if (!st.isFile()) page = ""; } catch { page = ""; } }
+    if (!page) { // 没写页面名 → 用最近改动的
+      const files = (await readdir(WORKSPACE)).filter((f) => f.endsWith(".html"));
+      let best = null, bt = 0;
+      for (const f of files) { try { const st = await stat(join(WORKSPACE, f)); if (st.mtimeMs > bt) { bt = st.mtimeMs; best = f; } } catch {} }
+      if (best && Date.now() - bt < 10 * 60 * 1000) page = best;
+    }
+    if (!page) return;
+    // 位置:任务里提到"底部/末尾"或"顶部/开头" → 附加滚动
+    let scroll = null;
+    if (/(底部|最下面|最底|末尾|页脚|bottom)/i.test(t)) scroll = "bottom";
+    else if (/(顶部|最上面|最上|开头|页头|顶部导航|top)/i.test(t)) scroll = "top";
+    if (page !== live.page || scroll) {
+      console.log("[live] 让观众看结果 →", page, scroll ? "(+" + scroll + ")" : "");
+      enqueueSiteAuto({ type: "goto", path: page });
+      if (scroll) enqueueSiteAuto({ type: "scroll", dir: scroll });
+    }
   } catch {}
 }
 function onFinishedEvent() {
@@ -2172,7 +2184,7 @@ function onFinishedEvent() {
     finishRun("done");
     live.holdUntil = Date.now() + VIEW_PAUSE_MS; // 给观众留时间看结果(期间不接新任务)
     if (live.session !== "idle") { live.session = "idle"; broadcastLive(); }
-    if (!wasAuto) showLatestPage(); // 观众的任务:自动切到刚改的页面
+    showLatestPage(live.currentRun ? live.currentRun.text : ""); // 精确切到刚改的页面/位置(观众任务与自动任务都适用;已在则跳过)
     changed();
     maybeInject();
   }, 1000);
