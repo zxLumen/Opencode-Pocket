@@ -2051,7 +2051,9 @@ async function autoCreateLoop() {
     // 1) before:先把观众视角切到相关页面/位置 —— 并入票池(kind:site),观众可见,按 SITE_VOTE_MS 用票首执行
     if (plan.action === "improve" && plan.page) live.page = plan.page; // 整轮都展示目标页(中途重载也回它)
     if (plan.before && SITE_CMD_ENABLED) { enqueueSiteAuto(plan.before); await sleep(SITE_VOTE_MS + 1500); }
-    // 2) task:交给 AI 做(injectTop 会把它从票池移除并记入已执行)
+    // 2) task:交给 AI 做 —— **注入前再确认一次**:before 的等待期间可能已有观众票被注入(实测会 6 秒内两轮,把观众那条顶掉)
+    if (live.session !== "idle" || live.injecting) { console.log("[live] 自动创作让位:期间会话已在跑(不顶掉)"); continue; }
+    if (live.options.some((o) => o !== opt && o.kind !== "auto")) { console.log("[live] 自动创作让位:期间来了观众票"); continue; }
     const ok = await injectTop(opt, "auto");
     if (!ok) continue;
     autoCount++;
