@@ -561,7 +561,7 @@ const AUTO_CREATE_MS = Number(process.env.PLAYGROUND_AUTO_CREATE_INTERVAL_SEC ||
 const AUTO_CREATE_MAX = Number(process.env.PLAYGROUND_AUTO_CREATE_MAX || 0); // 0 = 不限
 const AUTO_FOCUS_MIN = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MIN || 3)); // 聚焦最少停留轮数
 const AUTO_FOCUS_MAX = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MAX || 6)); // 聚焦软上限(到点建议换)
-const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "小游戏 / 可视化 / 互动投票 / AI 演示 / 实用小工具";
+const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "有技术含量、能学到东西的作品:算法/数据结构可视化、AI·机器学习演示(含训练过程)、WebGL/3D 与物理仿真、生成艺术/程序化音乐、数据可视化仪表盘、实用工具(编辑器/转换器/分析器)、交互式科普/教程";
 const AUTO_WEB = process.env.PLAYGROUND_AUTO_WEB !== "0"; // 允许在任务里提示 agent 先联网找灵感
 const YT_API_KEY = process.env.YT_API_KEY || "";
 const YT_VIDEO_ID = (process.env.YT_VIDEO_ID || "").trim();
@@ -1761,6 +1761,7 @@ async function proposePlan() {
     const sys = "你是无人值守的直播导演,站在【观众视角】安排下一轮(观众只能看到右侧预览的一屏)。\n" +
       "【动作二选一】improve=挑一个现有页面做**有创意**的升级(优先新玩法/交互/可视化,少做纯样式微调);create=**从零做一个全新的东西**(新页面/新玩法/新工具),并在首页加入口。\n" +
       "【创作取向】优先:" + AUTO_STYLE + "。\n" +
+      "【拒绝奶头乐,重要】**不要**做「点击得分/接住/躲避/跑酷/打怪/连连看」这类纯消遣小游戏,也不要只堆粒子特效刷屏。要做**有技术含量、有信息量、能学到东西**的东西(见上方创作取向);宁可做一个小而深的工具/可视化,也不要再做第 N 个换皮小游戏。\n" +
       "【避免重复】不要与『现有页面』里已有的功能、或『最近已做』重复;重复度高的点子直接弃用,换别的。\n" +
       "【避免失败】不要重复『失败过』里的做法;换更简单、更可能一次做成的实现。\n" +
       "【受众信号】参考『观众投过的』哪些方向受欢迎。\n" +
