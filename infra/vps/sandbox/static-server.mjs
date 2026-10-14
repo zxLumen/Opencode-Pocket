@@ -2193,11 +2193,11 @@ function onFinishedEvent() {
   if (finishedTimer) clearTimeout(finishedTimer);
   finishedTimer = setTimeout(() => {
     finishedTimer = null;
-    const wasAuto = live.currentRun && live.currentRun.src === "auto";
+    const runText = live.currentRun ? live.currentRun.text : ""; // 必须在 finishRun 之前取(否则被清空)
     finishRun("done");
     live.holdUntil = Date.now() + VIEW_PAUSE_MS; // 给观众留时间看结果(期间不接新任务)
     if (live.session !== "idle") { live.session = "idle"; broadcastLive(); }
-    showLatestPage(live.currentRun ? live.currentRun.text : ""); // 精确切到刚改的页面/位置(观众任务与自动任务都适用;已在则跳过)
+    showLatestPage(runText); // 精确切到刚改的页面/位置(优先用任务里的页面名)
     changed();
     maybeInject();
   }, 1000);
