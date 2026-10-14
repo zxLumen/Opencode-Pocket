@@ -612,7 +612,8 @@ async function judgePage(page) {
   let st = null;
   try { st = await stat(join(WORKSPACE, page)); } catch { return false; }
   const rec = (live.pagePolicy || {})[page];
-  if (rec && rec.mtimeMs >= st.mtimeMs) return Boolean(rec.noShow); // 页面没变 → 用记录
+  // 用记录:①5 分钟内直接沿用(页面在开发中会频繁改动,避免反复调模型) ②超过 5 分钟但页面没变也沿用
+  if (rec && (Date.now() - (rec.at || 0) < 5 * 60 * 1000 || rec.mtimeMs >= st.mtimeMs)) return Boolean(rec.noShow);
   let title = "", text = "";
   try {
     const h = await readFile(join(WORKSPACE, page), "utf8");
