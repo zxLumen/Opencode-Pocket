@@ -599,6 +599,7 @@ const AUTO_CREATE_MS = Number(process.env.PLAYGROUND_AUTO_CREATE_INTERVAL_SEC ||
 const AUTO_CREATE_MAX = Number(process.env.PLAYGROUND_AUTO_CREATE_MAX || 0); // 0 = 不限
 const AUTO_FOCUS_MIN = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MIN || 3)); // 聚焦最少停留轮数
 const AUTO_FOCUS_MAX = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MAX || 6)); // 聚焦软上限(到点建议换)
+const VIEW_PAUSE_MS = Number(process.env.PLAYGROUND_VIEW_PAUSE_SEC || 25) * 1000; // 每轮跑完留给观众"看结果"的停顿(期间不接新任务)
 const AUTO_PROJECT = (process.env.PLAYGROUND_AUTO_PROJECT || "").trim(); // 常驻大项目:自动创作长期服务于它
 const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "生活化便民(吃穿住行玩买/健康/家庭),并接入外部平台:本地生活(附近吃喝玩乐·外卖·团购)、购物比价与优惠(淘宝/京东/拼多多)、出行(高德/百度地图·公交地铁·打车·12306)、天气与空气质量、生活缴费与快递查询、健康与用药提醒、家庭记账/菜谱/纪念日、招聘租房";
 const AUTO_WEB = process.env.PLAYGROUND_AUTO_WEB !== "0"; // 允许在任务里提示 agent 先联网找灵感
@@ -670,6 +671,7 @@ let live = {
   siteSeq: 0,
   page: "index.html", // 观众当前展示的页面(默认=首页;每次 goto 更新;仅作提示喂给模型,不做任何强制)
   lastViewOp: null, // 最近一次"观众视角校验"补的操作 {key,at}(去重,避免反复补同一个)
+  holdUntil: 0, // 暂停接棒到该时刻(每轮跑完给观众看结果)
   siteFirstAt: null,
   focus: null, // 自动创作聚焦 { action, page, title, rounds }
   guide: null, // { examples:[...], at }
@@ -2039,6 +2041,7 @@ async function autoCreateLoop() {
     if (live.blocked) continue;
     if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) continue;
     if (AUTO_CREATE_MAX > 0 && autoCount >= AUTO_CREATE_MAX) continue;
+    if (Date.now() < live.holdUntil) continue; // 刚跑完,先让观众看结果
     if (Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue; // 开跑按间隔(入池由排队器随时做)
     if (live.session !== "idle") continue;
     if (live.injecting) continue;
@@ -2134,6 +2137,7 @@ async function injectTop(top, src) {
 }
 function maybeInject() {
   if (!LIVE_ENABLED || !live.autoDirect) return;
+  if (Date.now() < live.holdUntil) return; // 刚跑完,先让观众看结果
   if (live.blocked) return; // 有 question/permission 待答 → 暂停接棒,投票保留
   if (live.session !== "idle") return;
   if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) return;
@@ -2146,13 +2150,30 @@ function maybeInject() {
   injectTop(top);
 }
 let finishedTimer = null;
+// 跑完后把观众"带去看结果":找最近被改动的 .html 并切过去
+async function showLatestPage() {
+  if (!SITE_CMD_ENABLED) return;
+  try {
+    const files = (await readdir(WORKSPACE)).filter((f) => f.endsWith(".html"));
+    let best = null, bt = 0;
+    for (const f of files) { try { const st = await stat(join(WORKSPACE, f)); if (st.mtimeMs > bt) { bt = st.mtimeMs; best = f; } } catch {} }
+    if (!best || Date.now() - bt > 5 * 60 * 1000) return; // 太旧就不切
+    if (best === live.page) return;
+    console.log("[live] 让观众看结果 →", best);
+    enqueueSiteAuto({ type: "goto", path: best });
+  } catch {}
+}
 function onFinishedEvent() {
   if (Date.now() - live.lastInjectAt < 2000) return; // 刚注入,忽略旧运行的尾随事件
   if (finishedTimer) clearTimeout(finishedTimer);
   finishedTimer = setTimeout(() => {
     finishedTimer = null;
+    const wasAuto = live.currentRun && live.currentRun.src === "auto";
     finishRun("done");
+    live.holdUntil = Date.now() + VIEW_PAUSE_MS; // 给观众留时间看结果(期间不接新任务)
     if (live.session !== "idle") { live.session = "idle"; broadcastLive(); }
+    if (!wasAuto) showLatestPage(); // 观众的任务:自动切到刚改的页面
+    changed();
     maybeInject();
   }, 1000);
 }
