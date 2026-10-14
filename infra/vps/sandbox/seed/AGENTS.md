@@ -24,7 +24,9 @@
     美团 `https://www.meituan.com/s/关键词`、大众点评 `https://www.dianping.com/search/keyword/1/0_关键词`、
     高德 `https://uri.amap.com/search?keyword=关键词`、百度 `https://www.baidu.com/s?wd=关键词`、12306 等。
   - 取数据用**免 key 公开 API**：天气/空气质量（open-meteo）、汇率、万年历/节假日。
-  - **不要**在页面里直接 fetch 其它站点（CORS 会挡），**不要**违规抓取或 iframe 嵌入。
+  - 需要**真实外部数据**（天气/汇率/快递/搜索…）时，用**同源抓取代理**：
+    `fetch("__fetch?url=" + encodeURIComponent(目标URL))` —— 服务端抓取、绕开 CORS；目标须为**公网 http/https**（内网/本机会被拒）。
+  - **不要**做违规抓取或 iframe 嵌入，也**不要**直连外部站点（会被 CORS 挡）。
   - 手机优先、大字、打开就能用，带默认示例（直播时自动演示）。
 
 ## 观众不能直接操作网页（重要）

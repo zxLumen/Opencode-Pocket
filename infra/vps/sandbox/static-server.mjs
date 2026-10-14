@@ -11,6 +11,7 @@
 // 只用 node 内置模块,无依赖;node 是官方 opencode 镜像自带的运行时。
 import { createServer, request as httpRequest } from "node:http";
 import { stat, readFile, mkdir, writeFile, rename, readdir, access, appendFile } from "node:fs/promises";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { createReadStream, appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { extname, join, resolve, sep } from "node:path";
@@ -469,6 +470,43 @@ function proxyToApp(req, res, path, search) {
   req.pipe(up);
 }
 
+// 同源抓取代理:页面里 fetch("__fetch?url=<encodeURIComponent(目标)>") → 服务端抓取,绕开浏览器 CORS。
+// 安全护栏:只允许公网 http(s)(禁止本机/内网/云元数据,防 SSRF 打到 opencode 自身)、超时 12s、最大 3MB、并发上限。
+let pfInflight = 0;
+function isPrivateIp(ip) {
+  const s = String(ip || "");
+  if (s === "::1" || s.startsWith("fc") || s.startsWith("fd") || s.startsWith("fe80")) return true;
+  const m = s.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return false;
+  const a = +m[1], b = +m[2];
+  return a === 0 || a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || a >= 224;
+}
+async function handlePreviewFetch(req, res, url) {
+  const target = url.searchParams.get("url") || "";
+  let u;
+  try { u = new URL(target); } catch { return send(res, 400, "bad url", { "Content-Type": "text/plain; charset=utf-8" }); }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return send(res, 400, "only http(s)", { "Content-Type": "text/plain; charset=utf-8" });
+  const host = u.hostname.toLowerCase();
+  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal")) return send(res, 403, "forbidden host", { "Content-Type": "text/plain; charset=utf-8" });
+  try { const r = await dnsLookup(host, { all: true }); if ((r || []).some((x) => isPrivateIp(x.address))) return send(res, 403, "forbidden host(private)", { "Content-Type": "text/plain; charset=utf-8" }); }
+  catch { return send(res, 502, "dns failed", { "Content-Type": "text/plain; charset=utf-8" }); }
+  if (pfInflight >= 8) return send(res, 429, "too many requests", { "Content-Type": "text/plain; charset=utf-8" });
+  pfInflight++;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => { try { ctrl.abort(); } catch {} }, 12000);
+  try {
+    const r = await fetch(u, {
+      redirect: "follow", signal: ctrl.signal,
+      headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "accept-language": "zh-CN,zh;q=0.9", accept: req.headers.accept || "*/*" },
+    });
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > 3 * 1024 * 1024) return send(res, 413, "too large", { "Content-Type": "text/plain; charset=utf-8" });
+    res.writeHead(r.status, { ...baseHeaders, "Content-Type": r.headers.get("content-type") || "application/octet-stream", "Cache-Control": "public, max-age=60" });
+    res.end(buf);
+  } catch (e) {
+    return send(res, 502, "fetch failed: " + ((e && e.message) || e), { "Content-Type": "text/plain; charset=utf-8" });
+  } finally { clearTimeout(timer); pfInflight--; }
+}
 async function servePreview(req, res, pathname, search) {
   const isRead = req.method === "GET" || req.method === "HEAD";
   let rel = pathname.replace(/^\/preview\/?/, "");
@@ -1845,7 +1883,8 @@ async function proposePlan() {
       "【生活化·接入外部平台,重要】主题要**贴近日常生活**(吃穿住行玩买/健康/家庭/本地生活),**不要**做成程序员工具。要**接入外部平台内容**:\n" +
       "  ① 能用**深链跳转**就用:淘宝 `https://s.taobao.com/search?q=关键词`、京东 `https://search.jd.com/Search?keyword=关键词`、美团 `https://www.meituan.com/s/关键词`、大众点评 `https://www.dianping.com/search/keyword/1/0_关键词`、高德 `https://uri.amap.com/search?keyword=关键词`、百度 `https://www.baidu.com/s?wd=关键词`、12306 等;\n" +
       "  ② 能取数据的用**免 key 公开 API**:天气/空气质量(open-meteo)、汇率、万年历/节假日等;\n" +
-      "  ③ **不要**在页面里直接 fetch 其它站点(会被 CORS 挡),也**不要**做违规抓取/iframe 嵌入。\n" +
+      "  ③ 需要**真实外部数据**(天气/汇率/快递/搜索等)时,用**同源代理**:`fetch(\"__fetch?url=\" + encodeURIComponent(目标URL))`(服务端抓取,绕开 CORS;目标须为公网 http/https);\n" +
+      "  ④ **不要**做违规抓取/iframe 嵌入,也**不要**直连外部站点(会被 CORS 挡)。\n" +
       "  **手机优先、大字、打开就能用**,带默认示例(直播时自动演示一遍)。\n" +
       "【首页结构,重要】首页 index.html 是**「便民工具箱」**:按类别分组(图片/计算/文本/时间/生活)展示**便民小工具**的大卡片;小游戏/演示类统一收进**二级入口**「🎮 小游戏合集」(arcade.html),首页只放一个小按钮链到它。所有旧页面都保留,不要删除。\n" +
       "【避免重复】不要与『现有页面』里已有的功能、或『最近已做』重复;重复度高的点子直接弃用,换别的。\n" +
@@ -2519,6 +2558,7 @@ const server = createServer(async (req, res) => {
   // 预览(含访客后端反代)支持任意方法(GET/HEAD/POST/PUT/DELETE…),先于只读校验
   // 观众名录数据源(给访客网站用):/preview/__audience.json
   if (pathname === "/preview/__audience.json" || pathname === "/preview/__audience") return json(res, audiencePublic());
+  if (pathname === "/preview/__fetch") return handlePreviewFetch(req, res, url); // 同源抓取代理(绕 CORS)
   if (pathname === "/preview" || pathname.startsWith("/preview/")) return servePreview(req, res, pathname, url.search);
 
   // 直播投票:榜单页 + 状态(SSE) + 管理(POST,需 token);读写都在只读校验之前
