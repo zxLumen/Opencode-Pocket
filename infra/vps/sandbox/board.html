@@ -183,7 +183,6 @@
     var chatLabel = !st.chat.enabled ? "弹幕 未配置" : ("弹幕 " + srcName + lsTxt + (st.chat.connected ? " 已连接" : " 连接中") + lastDm);
     pill("p-yt", st.chat.connected, chatLabel, st.chat.enabled && !!st.chat.error);
     pill("p-auto", st.autoDirect, st.autoDirect ? "自动接棒 开" : "自动接棒 关");
-    window.__autoNextAt = st.autoNextAt || 0; // 下一轮自动创作时间(本地每秒倒计时)
 
     var opts = st.options || [];
     var max = 1;
@@ -260,12 +259,6 @@
   } catch (err) {}
   setInterval(function () { if (!es || es.readyState !== 1) load(); }, 3000);
   setInterval(function () { if (last && last.question) render(last); }, 1000); // 倒计时本地走秒
-  setInterval(function () { // 下一轮自动创作倒计时(本地每秒)
-    var el = $("p-auto"); if (!el) return;
-    var at = window.__autoNextAt || 0, left = at - Date.now();
-    if (left > 0) { var m = Math.floor(left / 60000), sec = Math.floor((left % 60000) / 1000); el.textContent = "自动接棒 · 下一轮 " + m + ":" + (sec < 10 ? "0" : "") + sec; }
-    else el.textContent = "自动接棒 开";
-  }, 1000);
   setInterval(function () { if (last && last.session === "running" && !last.question) render(last); }, 5000); // 运行中刷新「已耗时」
 
   // ---- 管理 ----
