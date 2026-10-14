@@ -1168,6 +1168,7 @@ async function ytLoop() {
     } catch (e) {
       live.chat.error = String((e && e.message) || e);
       console.error("[live] YouTube 初始化(" + mode + "):", live.chat.error);
+      if (live.chat.error.includes("未在直播")) { await sleep(30000); continue; } // 没开播:保持当前模式等开播(别误切 API)
       if (mode === "innertube") { console.warn("[live] innertube 不可用 → 退回 Data API(会消耗配额)"); mode = "api"; continue; }
       await sleep(20000);
     }
