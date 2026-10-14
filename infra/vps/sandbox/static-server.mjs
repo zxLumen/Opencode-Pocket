@@ -1741,7 +1741,7 @@ async function verifyView(goal, page) {
     if (s < 0 || e < s) return null;
     let o; try { o = JSON.parse(c.slice(s, e + 1)); } catch { return null; }
     const op = (o && !o.ok) ? sanitizeSite(o.op) : null;
-    console.log("[live] 观众视角校验:", (o && o.why) || "", op ? JSON.stringify(op) : "(已达标)");
+    console.log("[live] 观众视角校验:", (o && o.why) || "", op ? JSON.stringify(op) : ((o && o.ok) ? "(已达标)" : "(未达标但无可补操作)"));
     return op;
   } catch { return null; }
 }
