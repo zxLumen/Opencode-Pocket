@@ -600,6 +600,18 @@ const AUTO_CREATE_MAX = Number(process.env.PLAYGROUND_AUTO_CREATE_MAX || 0); // 
 const AUTO_FOCUS_MIN = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MIN || 3)); // 聚焦最少停留轮数
 const AUTO_FOCUS_MAX = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MAX || 6)); // 聚焦软上限(到点建议换)
 const VIEW_PAUSE_MS = Number(process.env.PLAYGROUND_VIEW_PAUSE_SEC || 25) * 1000;
+// 平台合规:未取得资质,直播里不得讲解金融投资类内容(实测观众提"A股数据库"→ 平台"违规提醒",多次将断播)。
+// 策略:**页面保留**(观众可自行从预览站访问),但**直播预览绝不切进去**(禁止 goto 到金融类页面)。
+const FINANCE_RE = /(股票|炒股|股民|A股|港股|美股|大盘|个股|行情|涨跌|涨停|跌停|K线|均线|证券|券商|开户|基金|债券|期货|期权|外汇|汇市|虚拟货币|加密货币|数字货币|比特币|以太坊|挖矿|理财|投资|投顾|资管|私募|保险|保费|贷款|网贷|信贷|信用卡|财报|市盈率|市净率|资金流|龙虎榜|博彩|彩票|赌博|下注)/;
+const noShowCache = new Map(); // 页面 -> 是否"直播不可展示"(金融投资类)
+async function isNoShowPage(page) {
+  if (!page) return false;
+  if (noShowCache.has(page)) return noShowCache.get(page);
+  let v = FINANCE_RE.test(page);
+  if (!v) { try { const h = await readFile(join(WORKSPACE, page), "utf8"); v = FINANCE_RE.test(((h.match(/<title>([^<]*)<\/title>/i) || [])[1] || "") + h.slice(0, 6000)); } catch {} }
+  noShowCache.set(page, v);
+  return v;
+}
 const FOLLOWUP_MAX = Math.max(1, Number(process.env.PLAYGROUND_FOLLOWUP_ROUNDS || 6)); // 观众提了方向后,自动开发"沿着它辅助"的轮数 // 每轮跑完留给观众"看结果"的停顿(期间不接新任务)
 const AUTO_PROJECT = (process.env.PLAYGROUND_AUTO_PROJECT || "").trim(); // 常驻大项目:自动创作长期服务于它
 const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "生活化便民(吃穿住行玩买/健康/家庭),并接入外部平台:本地生活(附近吃喝玩乐·外卖·团购)、购物比价与优惠(淘宝/京东/拼多多)、出行(高德/百度地图·公交地铁·打车·12306)、天气与空气质量、生活缴费与快递查询、健康与用药提醒、家庭记账/菜谱/纪念日、招聘租房";
@@ -1568,6 +1580,15 @@ async function siteTick() {
   const top = sites.slice().sort((a, b) => b.votes - a.votes || a.createdAt - b.createdAt)[0];
   let cmd = {};
   try { cmd = JSON.parse(top.cmd || "{}"); } catch {}
+  // 平台合规:金融投资类页面不在直播里展示(观众自己从预览站访问不受影响)
+  if (cmd.type === "goto" && cmd.path && await isNoShowPage(cmd.path)) {
+    console.warn("[live] 跳过切到金融投资类页面(平台合规):", cmd.path);
+    recordExecuted({ round: live.round, text: top.text + " (跳过:金融类页面不在直播展示)", votes: top.votes, src: top.src || "?", at: Date.now(), status: "failed" });
+    live.options = live.options.filter((o) => o !== top);
+    live.siteFirstAt = null;
+    changed();
+    return;
+  }
   // 目标页还没生成/写错名 → 不跳转,避免预览变 404 空白
   if (cmd.type === "goto" && cmd.path) {
     let okFile = false;
@@ -1889,6 +1910,7 @@ async function proposePlan() {
       "【创作取向】优先:" + AUTO_STYLE + "。\n" +
       (fuActive ? "【跟随观众方向·最高优先】观众刚提:「" + String(fu.text || "").slice(0, 90) + "」" + (fu.page ? "(页面 " + fu.page + ")" : "") + "\n  → 这一轮**必须沿着这个方向做**,并且**以辅助开发为主**:补全功能/修问题/优化交互/补数据与入口/完善体验;**不要另起无关新主题**,也不要把方向改掉。\n" : "") +
       (AUTO_PROJECT ? (fuActive ? "【常驻项目(次优先,方向冲突时让位给观众)】" + AUTO_PROJECT + "\n" : "【常驻项目·最高优先】" + AUTO_PROJECT + "\n  → 这一轮**必须服务于这个项目**:优先 improve 项目页面 / 扩充项目的数据与维度 / 优化项目界面;不要另起无关新主题。\n") : "") +
+      "【平台合规·重要】**操作过程中绝不把预览切到金融投资类页面**(股票/炒股/A股/港股/美股/行情/K线/基金/债券/期货/期权/外汇/虚拟货币/理财/投资/投顾/保险/贷款/信贷/信用卡/博彩/彩票/赌博等)——未取得资质在直播间展示这些会被平台警告/断播;这类页面**保留**、观众自己从预览站访问没问题,但**before/after 与校验都别 goto 过去**,也别在直播里讲解。\n" +
       "【拒绝奶头乐,重要】**不要**做「点击得分/接住/躲避/跑酷/打怪/连连看」这类纯消遣小游戏,也不要只堆粒子特效刷屏。\n" +
       "【生活化·接入外部平台,重要】主题要**贴近日常生活**(吃穿住行玩买/健康/家庭/本地生活),**不要**做成程序员工具。要**接入外部平台内容**:\n" +
       "  ① 能用**深链跳转**就用:淘宝 `https://s.taobao.com/search?q=关键词`、京东 `https://search.jd.com/Search?keyword=关键词`、美团 `https://www.meituan.com/s/关键词`、大众点评 `https://www.dianping.com/search/keyword/1/0_关键词`、高德 `https://uri.amap.com/search?keyword=关键词`、百度 `https://www.baidu.com/s?wd=关键词`、12306 等;\n" +
@@ -2177,6 +2199,7 @@ async function showLatestPage(taskText) {
       if (best && Date.now() - bt < 10 * 60 * 1000) page = best;
     }
     if (!page) return;
+    if (await isNoShowPage(page)) { console.log("[live] 不展示金融投资类页面(平台合规):", page); return; }
     // 位置:任务里提到"底部/末尾"或"顶部/开头" → 附加滚动
     let scroll = null;
     if (/(底部|最下面|最底|末尾|页脚|bottom)/i.test(t)) scroll = "bottom";
