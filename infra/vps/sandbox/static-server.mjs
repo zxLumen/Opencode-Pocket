@@ -676,9 +676,14 @@ function saveLive() {
 // ---------- 状态广播(SSE) ----------
 const sseClients = new Set();
 function publicState() {
-  const options = [...live.options].sort((a, b) => b.votes - a.votes || a.createdAt - b.createdAt)
-    .map((o, i) => ({ rank: i + 1, id: o.id, text: o.text, votes: o.votes, src: o.src || "" }));
-  const leader = options.length ? { text: options[0].text, votes: options[0].votes } : null;
+  let rankN = 0;
+  const options = [...live.options].sort(sortRank).map((o) => {
+    const isAuto = o.kind === "auto";
+    if (!isAuto) rankN += 1;
+    return { rank: isAuto ? null : rankN, id: o.id, text: o.text, votes: o.votes, src: o.src || "", kind: o.kind || "opinion" };
+  });
+  const leadOpt = options.find((o) => o.kind !== "auto");
+  const leader = leadOpt ? { text: leadOpt.text, votes: leadOpt.votes } : null;
   return {
     round: live.round,
     autoDirect: live.autoDirect,
@@ -782,11 +787,19 @@ function addOpinion(text, channelId, name) {
   appendHistory({ kind: "message", at: Date.now(), src: srcOf(channelId), user: channelId, name: name || "", text: text, votes: opt.votes });
   return opt;
 }
+// 排序:票多在前;票相同则"非自动"在前(自动项=下一个计划,不抢票王)
+function sortRank(a, b) {
+  const d = (b.votes || 0) - (a.votes || 0);
+  if (d) return d;
+  const aa = a.kind === "auto" ? 1 : 0, ba = b.kind === "auto" ? 1 : 0;
+  if (aa !== ba) return aa - ba;
+  return (a.createdAt || 0) - (b.createdAt || 0);
+}
 function sortedOptions() {
-  return [...live.options].sort((a, b) => b.votes - a.votes || a.createdAt - b.createdAt);
+  return [...live.options].sort(sortRank);
 }
 function activeOptions() {
-  return live.options.filter((o) => !o.sent).sort((a, b) => b.votes - a.votes || a.createdAt - b.createdAt);
+  return live.options.filter((o) => !o.sent && o.kind !== "auto").sort(sortRank); // 排除"下一个计划":#1 不会误投到它
 }
 function trimOptions() {
   if (live.options.length <= 30) return;

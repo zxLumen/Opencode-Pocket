@@ -44,6 +44,8 @@
   .opt .votes { justify-self: end; min-width: 44px; text-align: right; font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .opt .votes small { font-size: 12px; color: var(--dim); font-weight: 600; }
   .src { display: inline-block; font-size: 11px; line-height: 1; padding: 2px 6px; margin-right: 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); vertical-align: middle; }
+  .src.next { color: #93c5fd; border-color: #1d4ed8; }
+  .opt .rank.auto { background: #1d4ed8; color: #fff; }
   /* 已执行:直接从票池移除,不置灰 */
   .empty { color: var(--dim); padding: 18px 6px; font-size: 15px; }
   .guide { display: flex; flex-direction: column; gap: 8px; padding: 6px 4px; }
@@ -194,11 +196,15 @@
       if (ex.length) out += '<div class="gex">试试:</div>' + ex.map(function (t) { return '<div class="gtip">「' + esc(t) + '」</div>'; }).join("");
       out += '</div>';
     }
-    out += opts.slice(0, 12).map(function (o, idx) {
+    var firstReal = null;
+    for (var oi = 0; oi < opts.length && oi < 12; oi++) { if (opts[oi].kind !== "auto") { firstReal = opts[oi]; break; } }
+    out += opts.slice(0, 12).map(function (o) {
       var pct = Math.round((o.votes / max) * 100);
-      return '<div class="opt' + (idx === 0 ? " lead" : "") + '">' +
-        '<div class="rank">' + o.rank + '</div>' +
-        '<div class="body"><div class="text">' + srcTag(o.src) + esc(o.text) + '</div>' +
+      var isAuto = o.kind === "auto";
+      var badge = isAuto ? '<span class="src next">下一个计划</span>' : srcTag(o.src);
+      return '<div class="opt' + (o === firstReal ? " lead" : "") + '">' +
+        '<div class="rank' + (isAuto ? " auto" : "") + '">' + (isAuto ? "✦" : o.rank) + '</div>' +
+        '<div class="body"><div class="text">' + badge + esc(o.text) + '</div>' +
         '<div class="bar"><i style="width:' + pct + '%"></i></div></div>' +
         '<div class="votes">' + o.votes + '<small> 票</small></div></div>';
     }).join("");
