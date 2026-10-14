@@ -1762,8 +1762,7 @@ async function autoCreateLoop() {
     if (live.blocked) continue;
     if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) continue;
     if (AUTO_CREATE_MAX > 0 && count >= AUTO_CREATE_MAX) continue;
-    if (Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue;
-    // 票池空 → 提前想好**并放进票池**(观众提前看到下一个计划);会话还在跑也不影响
+    // 票池空 → 立刻提前想好**并放进票池**(观众提前看到下一个计划);不受"注入间隔"限制
     if (!live.options.length) {
       // 聚焦指向的页面已被删除/还原 → 丢弃聚焦,重新选题(否则会一直改一个不存在的页面)
       if (live.focus && live.focus.action === "improve" && live.focus.page) {
@@ -1781,6 +1780,7 @@ async function autoCreateLoop() {
         changed();
       }
     }
+    if (Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue; // 注入仍按间隔,但"入池"已经提前做了
     if (live.session !== "idle") continue;
     if (live.injecting) continue;
     if (live.options.some((o) => o.kind !== "auto")) continue; // 有观众票 → 让位,不抢
