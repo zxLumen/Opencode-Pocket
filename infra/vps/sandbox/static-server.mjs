@@ -599,7 +599,8 @@ const AUTO_CREATE_MS = Number(process.env.PLAYGROUND_AUTO_CREATE_INTERVAL_SEC ||
 const AUTO_CREATE_MAX = Number(process.env.PLAYGROUND_AUTO_CREATE_MAX || 0); // 0 = 不限
 const AUTO_FOCUS_MIN = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MIN || 3)); // 聚焦最少停留轮数
 const AUTO_FOCUS_MAX = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MAX || 6)); // 聚焦软上限(到点建议换)
-const VIEW_PAUSE_MS = Number(process.env.PLAYGROUND_VIEW_PAUSE_SEC || 25) * 1000; // 每轮跑完留给观众"看结果"的停顿(期间不接新任务)
+const VIEW_PAUSE_MS = Number(process.env.PLAYGROUND_VIEW_PAUSE_SEC || 25) * 1000;
+const FOLLOWUP_MAX = Math.max(1, Number(process.env.PLAYGROUND_FOLLOWUP_ROUNDS || 6)); // 观众提了方向后,自动开发"沿着它辅助"的轮数 // 每轮跑完留给观众"看结果"的停顿(期间不接新任务)
 const AUTO_PROJECT = (process.env.PLAYGROUND_AUTO_PROJECT || "").trim(); // 常驻大项目:自动创作长期服务于它
 const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "生活化便民(吃穿住行玩买/健康/家庭),并接入外部平台:本地生活(附近吃喝玩乐·外卖·团购)、购物比价与优惠(淘宝/京东/拼多多)、出行(高德/百度地图·公交地铁·打车·12306)、天气与空气质量、生活缴费与快递查询、健康与用药提醒、家庭记账/菜谱/纪念日、招聘租房";
 const AUTO_WEB = process.env.PLAYGROUND_AUTO_WEB !== "0"; // 允许在任务里提示 agent 先联网找灵感
@@ -672,6 +673,7 @@ let live = {
   page: "index.html", // 观众当前展示的页面(默认=首页;每次 goto 更新;仅作提示喂给模型,不做任何强制)
   lastViewOp: null, // 最近一次"观众视角校验"补的操作 {key,at}(去重,避免反复补同一个)
   holdUntil: 0, // 暂停接棒到该时刻(每轮跑完给观众看结果)
+  followUp: null, // 观众刚提的方向 {text,page,at,rounds}:后续自动开发沿着它、以辅助为主
   siteFirstAt: null,
   focus: null, // 自动创作聚焦 { action, page, title, rounds }
   guide: null, // { examples:[...], at }
@@ -1870,6 +1872,9 @@ async function proposePlan() {
   // 失败过的:不要重复同样的做法(换更简单/更可行的实现)
   const failed = live.executed.filter((e) => e.status === "failed").slice(-5).map((e) => e.text.slice(0, 44));
   const guide = live.guide && live.guide.examples ? live.guide.examples.join(" | ") : "";
+  const fu = live.followUp;
+  const fuActive = Boolean(fu && Date.now() - (fu.at || 0) < 3 * 60 * 60 * 1000 && (fu.rounds || 0) < FOLLOWUP_MAX);
+  if (fuActive) fu.rounds = (fu.rounds || 0) + 1;
   const cur = live.page || ""; // 观众当前正在看的那一页(仅提示,由模型自行决定怎么带观众过去)
   const f = live.focus;
   const rounds = f ? f.rounds || 1 : 0;
@@ -1882,7 +1887,8 @@ async function proposePlan() {
     const sys = "你是无人值守的直播导演,站在【观众视角】安排下一轮(观众只能看到右侧预览的一屏)。\n" +
       "【动作二选一】improve=挑一个现有页面做**有创意**的升级(优先新玩法/交互/可视化,少做纯样式微调);create=**从零做一个全新的东西**(新页面/新玩法/新工具),并在首页加入口。\n" +
       "【创作取向】优先:" + AUTO_STYLE + "。\n" +
-      (AUTO_PROJECT ? "【常驻项目·最高优先】" + AUTO_PROJECT + "\n  → 这一轮**必须服务于这个项目**:优先 improve 项目页面 / 扩充项目的数据与维度 / 优化项目界面;不要另起无关新主题。\n" : "") +
+      (fuActive ? "【跟随观众方向·最高优先】观众刚提:「" + String(fu.text || "").slice(0, 90) + "」" + (fu.page ? "(页面 " + fu.page + ")" : "") + "\n  → 这一轮**必须沿着这个方向做**,并且**以辅助开发为主**:补全功能/修问题/优化交互/补数据与入口/完善体验;**不要另起无关新主题**,也不要把方向改掉。\n" : "") +
+      (AUTO_PROJECT ? (fuActive ? "【常驻项目(次优先,方向冲突时让位给观众)】" + AUTO_PROJECT + "\n" : "【常驻项目·最高优先】" + AUTO_PROJECT + "\n  → 这一轮**必须服务于这个项目**:优先 improve 项目页面 / 扩充项目的数据与维度 / 优化项目界面;不要另起无关新主题。\n") : "") +
       "【拒绝奶头乐,重要】**不要**做「点击得分/接住/躲避/跑酷/打怪/连连看」这类纯消遣小游戏,也不要只堆粒子特效刷屏。\n" +
       "【生活化·接入外部平台,重要】主题要**贴近日常生活**(吃穿住行玩买/健康/家庭/本地生活),**不要**做成程序员工具。要**接入外部平台内容**:\n" +
       "  ① 能用**深链跳转**就用:淘宝 `https://s.taobao.com/search?q=关键词`、京东 `https://search.jd.com/Search?keyword=关键词`、美团 `https://www.meituan.com/s/关键词`、大众点评 `https://www.dianping.com/search/keyword/1/0_关键词`、高德 `https://uri.amap.com/search?keyword=关键词`、百度 `https://www.baidu.com/s?wd=关键词`、12306 等;\n" +
@@ -1929,6 +1935,8 @@ async function proposePlan() {
     if (action === "improve" && (!page || !pages.some((p) => p.file === page))) { console.log("[live] 目标页不存在,改为新建:", page || "(空)"); action = "create"; }
     // 空站(只剩一个起步 index)→ 强制从零 create:此时没有东西可「改造」
     if (pages.length <= 1 && action !== "create") { console.log("[live] 空站 → 强制从零新建(无内容可改造)"); action = "create"; page = ""; }
+    // 跟随观众方向:强制 improve 观众那页(辅助开发)
+    if (fuActive && fu.page && pages.some((p) => p.file === fu.page)) { action = "improve"; page = fu.page; }
     // 不依赖模型给的 before/after:据 action+page 自己推导 goto,确保一定切到目标页
     let before = sanitizeSite(o && o.before);
     let after = sanitizeSite(o && o.after);
@@ -2123,6 +2131,11 @@ async function injectTop(top, src) {
     } catch (e) { console.error("[live] 注入失败:", (e && e.message) || e); return false; }
   } finally { live.injecting = false; }
   const entry = { round: live.round, text: (src === "auto" ? "【自动】" : "") + top.text, votes: top.votes, src: src === "auto" ? "auto" : (top.src || "?"), at: Date.now(), status: "running" };
+  if (src !== "auto") { // 观众提的任务 → 记下方向,后续自动开发"沿着它辅助"
+    const p = (String(top.text || "").match(/([A-Za-z0-9_-]+\.html)/) || [])[1] || live.page || "";
+    live.followUp = { text: String(top.text || "").slice(0, 120), page: p, at: Date.now(), rounds: 0 };
+    console.log("[live] 记下观众方向:", live.followUp.text.slice(0, 50), p ? "→ " + p : "");
+  }
   for (const e of live.executed) if (e.status === "running") e.status = "done"; // 新一轮开始→旧的「执行中」视为完成(避免永久卡在执行中)
   recordExecuted(entry);
   live.currentRun = entry;
