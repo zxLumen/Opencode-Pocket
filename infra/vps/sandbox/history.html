@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>历史票选 · zxLumen 访客沙盒</title>
+<style>
+  :root {
+    --bg: #0b1016; --card: #121a24; --card2: #16202c; --line: #22303f;
+    --fg: #e8eef6; --dim: #8aa0b6; --accent: #2563eb; --lead: #f59e0b; --ok: #22c55e; --warn: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
+  #app { max-width: 1100px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; }
+  .sub { color: var(--dim); font-size: 13px; }
+  .stats { display: flex; gap: 10px; flex-wrap: wrap; }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 13px; color: var(--dim); }
+  .stat b { color: var(--fg); font-size: 16px; margin-left: 6px; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; }
+  .bar input, .bar select, .bar button { font: inherit; font-size: 13px; color: var(--fg); background: var(--card2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+  .bar input { min-width: 180px; }
+  .bar button { cursor: pointer; }
+  .bar button:hover { border-color: var(--accent); }
+  .wrap { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { position: sticky; top: 0; background: var(--card2); color: var(--dim); font-weight: 600; font-size: 12px; }
+  td.t { white-space: nowrap; color: var(--dim); font-variant-numeric: tabular-nums; }
+  td.n { white-space: nowrap; }
+  td.v { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .src { display: inline-block; font-size: 11px; line-height: 1; padding: 2px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .kind { display: inline-block; font-size: 11px; line-height: 1; padding: 2px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .kind.executed { color: #93c5fd; border-color: #1d4ed8; }
+  .kind.message { color: var(--dim); }
+  .st { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
+  .st.done { color: var(--ok); border-color: #14532d; }
+  .st.running { color: #fbbf24; border-color: #78350f; }
+  .st.failed, .st.timeout { color: var(--warn); border-color: #7f1d1d; }
+  .txt { overflow-wrap: anywhere; }
+  .muted { color: var(--dim); padding: 16px; text-align: center; }
+  .top { display: flex; flex-direction: column; gap: 6px; }
+  .top .row { display: flex; gap: 8px; align-items: baseline; }
+  .top .rank { color: var(--dim); width: 34px; }
+  .top .cnt { color: var(--lead); font-weight: 700; margin-left: auto; }
+  footer { color: var(--dim); font-size: 12px; text-align: center; padding: 6px; }
+  a { color: #93c5fd; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>历史票选</h1>
+    <span class="sub">全部归档(弹幕 + 已执行)· <a href="/board">← 回到榜单</a></span>
+  </header>
+  <div class="stats">
+    <div class="stat">总记录<b id="s-total">-</b></div>
+    <div class="stat">弹幕条数<b id="s-msg">-</b></div>
+    <div class="stat">已执行<b id="s-exec">-</b></div>
+    <div class="stat">当前筛选<b id="s-show">-</b></div>
+  </div>
+  <div class="bar">
+    <select id="f-kind">
+      <option value="">全部类型</option>
+      <option value="message">只看弹幕</option>
+      <option value="executed">只看执行</option>
+    </select>
+    <select id="f-src"><option value="">全部来源</option></select>
+    <input id="f-q" placeholder="搜索内容 / 昵称…">
+    <button id="b-refresh">刷新</button>
+    <button id="b-csv">导出 CSV</button>
+    <button id="b-json">导出 JSON</button>
+  </div>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>时间</th><th>类型</th><th>来源</th><th>用户</th><th class="txt">内容</th><th>票</th><th>状态</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="7" class="muted">加载中…</td></tr></tbody>
+    </table>
+  </div>
+  <footer id="foot"></footer>
+</div>
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var SRC = { bili: "B站", youtube: "YouTube", douyin: "抖音", ingest: "上报", admin: "管理", anon: "匿名", auto: "自动", test: "测试", test2: "测试", selftest: "自测", diag: "自测" };
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]; }); }
+  function srcName(s) { return SRC[s] || s || "?"; }
+  function hhmmss(at) { try { return new Date(at).toLocaleString("zh-CN", { hour12: false }); } catch (e) { return "-"; } }
+  function stLabel(s) { return { running: "执行中", done: "已完成", failed: "失败", timeout: "已中断" }[s] || s || ""; }
+  function kindLabel(k) { return { message: "弹幕", executed: "执行", "run-end": "结束" }[k] || k || ""; }
+  var ALL = [];
+
+  function render() {
+    var kind = $("f-kind").value, src = $("f-src").value, q = $("f-q").value.trim().toLowerCase();
+    var rows = ALL.filter(function (r) {
+      if (kind && r.kind !== kind) return false;
+      if (src && r.src !== src) return false;
+      if (q) { var hay = ((r.text || "") + " " + (r.name || "") + " " + (r.user || "")).toLowerCase(); if (hay.indexOf(q) < 0) return false; }
+      return true;
+    });
+    $("s-show").textContent = rows.length;
+    if (!rows.length) { $("rows").innerHTML = '<tr><td colspan="7" class="muted">没有匹配的记录</td></tr>'; return; }
+    // 从新到旧
+    rows = rows.slice().sort(function (a, b) { return (b.at || 0) - (a.at || 0); });
+    $("rows").innerHTML = rows.slice(0, 2000).map(function (r) {
+      return '<tr>' +
+        '<td class="t">' + esc(hhmmss(r.at)) + '</td>' +
+        '<td class="n"><span class="kind ' + esc(r.kind) + '">' + esc(kindLabel(r.kind)) + '</span></td>' +
+        '<td class="n"><span class="src">' + esc(srcName(r.src)) + '</span></td>' +
+        '<td class="n">' + esc(r.name || r.user || "") + '</td>' +
+        '<td class="txt">' + esc(r.text || "") + '</td>' +
+        '<td class="v">' + (r.votes || 0) + '</td>' +
+        '<td class="n">' + (r.status ? '<span class="st ' + esc(r.status) + '">' + esc(stLabel(r.status)) + '</span>' : "") + '</td>' +
+        '</tr>';
+    }).join("");
+  }
+
+  function fillSrc() {
+    var set = {};
+    ALL.forEach(function (r) { if (r.src) set[r.src] = 1; });
+    var sel = $("f-src"), cur = sel.value;
+    sel.innerHTML = '<option value="">全部来源</option>' + Object.keys(set).sort().map(function (s) { return '<option value="' + esc(s) + '">' + esc(srcName(s)) + '</option>'; }).join("");
+    sel.value = cur;
+  }
+
+  function load() {
+    fetch("/__lb/history?limit=10000", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (d) {
+      ALL = (d && d.items) || [];
+      $("s-total").textContent = ALL.length;
+      $("s-msg").textContent = ALL.filter(function (r) { return r.kind === "message"; }).length;
+      $("s-exec").textContent = ALL.filter(function (r) { return r.kind === "executed"; }).length;
+      fillSrc(); render();
+      $("foot").textContent = "共 " + ALL.length + " 条归档 · 每 10s 自动刷新 · " + new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    }).catch(function () { $("foot").textContent = "加载失败(稍后重试)"; });
+  }
+
+  function download(name, text, mime) {
+    var blob = new Blob([text], { type: mime || "text/plain;charset=utf-8" });
+    var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  }
+  $("b-csv").addEventListener("click", function () {
+    var rows = ALL.slice().sort(function (a, b) { return (a.at || 0) - (b.at || 0); });
+    var head = ["time", "kind", "src", "user", "name", "text", "votes", "status"];
+    var lines = [head.join(",")].concat(rows.map(function (r) {
+      return [hhmmss(r.at), r.kind || "", r.src || "", r.user || "", r.name || "", r.text || "", r.votes || 0, r.status || ""].map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(",");
+    }));
+    download("history.csv", "\ufeff" + lines.join("\n"), "text/csv;charset=utf-8");
+  });
+  $("b-json").addEventListener("click", function () { download("history.json", JSON.stringify(ALL, null, 2), "application/json"); });
+  $("b-refresh").addEventListener("click", load);
+  $("f-kind").addEventListener("change", render);
+  $("f-src").addEventListener("change", render);
+  $("f-q").addEventListener("input", render);
+  load();
+  setInterval(load, 10000);
+})();
+</script>
+</body>
+</html>

@@ -196,6 +196,12 @@
 			rewrite * /__board
 			import to_helper
 		}
+		# 历史票选页(全部归档)
+		@historyDoc path /history
+		handle @historyDoc {
+			rewrite * /__history
+			import to_helper
+		}
 		# 其它文档请求一律拉回工作台
 		handle {
 			redir * / 302

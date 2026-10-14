@@ -10,7 +10,7 @@
 //
 // 只用 node 内置模块,无依赖;node 是官方 opencode 镜像自带的运行时。
 import { createServer, request as httpRequest } from "node:http";
-import { stat, readFile, mkdir, writeFile, rename, readdir, access } from "node:fs/promises";
+import { stat, readFile, mkdir, writeFile, rename, readdir, access, appendFile } from "node:fs/promises";
 import { createReadStream, appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { extname, join, resolve, sep } from "node:path";
@@ -567,7 +567,37 @@ const CHAT_SOURCE = String(
 const CHAT_SOURCES = CHAT_SOURCE.split(",").map((s) => s.trim()).filter(Boolean);
 const INGEST_TOKEN = String(process.env.PLAYGROUND_INGEST_TOKEN || "").trim() || ADMIN_TOKEN || "";
 const BOARD_FILE = process.env.SANDBOX_BOARD_FILE || "/srv/board.html";
+const HISTORY_HTML = process.env.SANDBOX_HISTORY_FILE || "/srv/history.html";
+async function serveHistoryPage(req, res) {
+  let html;
+  try { html = await readFile(HISTORY_HTML, "utf8"); }
+  catch { return send(res, 500, "history unavailable", { "Content-Type": "text/plain; charset=utf-8" }); }
+  res.writeHead(200, { ...baseHeaders, "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+  res.end(req.method === "HEAD" ? undefined : html);
+}
+// 历史票选(全部归档):GET /__lb/history?limit=3000
+async function serveHistoryJson(req, res, url) {
+  const limit = Math.min(10000, Math.max(1, Number((url && url.searchParams.get("limit")) || 3000)));
+  const items = [];
+  try {
+    const raw = await readFile(HISTORY_FILE, "utf8");
+    for (const l of raw.split("\n").filter(Boolean).slice(-limit)) { try { items.push(JSON.parse(l)); } catch {} }
+  } catch {}
+  return json(res, { ok: true, count: items.length, items: items });
+}
 const STATE_DIR = process.env.PLAYGROUND_STATE_DIR || join(process.env.HOME || "/home/opencode", ".local/state/sandbox");
+const HISTORY_FILE = process.env.PLAYGROUND_HISTORY_FILE || join(STATE_DIR, "history.jsonl");
+// 永久归档:每条进池弹幕 + 每次执行都追加(不覆盖),供 /history 翻全部历史
+function appendHistory(rec) {
+  try {
+    mkdir(STATE_DIR, { recursive: true }).then(() => appendFile(HISTORY_FILE, JSON.stringify(rec) + "\n")).catch(() => {});
+  } catch {}
+}
+function recordExecuted(entry) {
+  live.executed.push(entry);
+  if (live.executed.length > 200) live.executed = live.executed.slice(-200);
+  appendHistory({ kind: "executed", at: entry.at || Date.now(), round: entry.round, src: entry.src || "?", text: entry.text, votes: entry.votes || 0, status: entry.status || "done" });
+}
 const STATE_FILE = join(STATE_DIR, "live.json");
 
 const chatEnabled = CHAT_SOURCES.some((s) => (s === "youtube" && YT_API_KEY && YT_VIDEO_ID) || (s === "bilibili" && BILI_ROOM_ID) || s === "ingest");
@@ -737,6 +767,7 @@ function addOpinion(text, channelId, name) {
     markMergeDirty();
   }
   vote(opt, channelId, name);
+  appendHistory({ kind: "message", at: Date.now(), src: srcOf(channelId), user: channelId, name: name || "", text: text, votes: opt.votes });
   return opt;
 }
 function sortedOptions() {
@@ -1281,8 +1312,7 @@ async function siteTick() {
   try { cmd = JSON.parse(top.cmd || "{}"); } catch {}
   live.site = { seq: (live.siteSeq = (live.siteSeq || 0) + 1), ...cmd };
   if (cmd.type === "goto" && cmd.path) live.page = cmd.path; // 仅记录观众当前在哪页(供模型参考)
-  live.executed.push({ round: live.round, text: top.text, votes: top.votes, src: top.src || "?", at: Date.now(), status: "done" });
-  if (live.executed.length > 200) live.executed = live.executed.slice(-200);
+  recordExecuted({ round: live.round, text: top.text, votes: top.votes, src: top.src || "?", at: Date.now(), status: "done" });
   live.options = live.options.filter((o) => o !== top); // 执行后从票池移除该条
   live.siteFirstAt = null;
   console.log("[live] 网站操作执行:", top.text, JSON.stringify(cmd));
@@ -1495,7 +1525,10 @@ function topOption() {
 }
 function finishRun(kind) {
   const e = live.currentRun;
-  if (e && e.status === "running") { e.status = kind; live.currentRun = null; changed(); }
+  if (e && e.status === "running") {
+    e.status = kind; live.currentRun = null; changed();
+    appendHistory({ kind: "run-end", at: Date.now(), round: e.round, src: e.src || "?", text: e.text, votes: e.votes || 0, status: kind });
+  }
 }
 // 明确的工作指令:注入前强制 build(保证执行)。
 // 不看 live.agent —— 它靠 agent-switched 事件维护,事件缺失时会滞后(实测踩过),
@@ -1766,8 +1799,7 @@ async function injectTop(top, src) {
       });
       if (!r.ok) throw new Error("agent HTTP " + r.status);
       const e2 = { round: live.round, text: "【切换模式】→ " + sw, votes: top.votes, at: Date.now(), status: "done" };
-      live.executed.push(e2);
-      if (live.executed.length > 200) live.executed = live.executed.slice(-200);
+      recordExecuted(e2);
       live.lastInjectAt = e2.at;
       live.agent = sw;
       live.lastSentText = null; // 切模式后,同一句再投不再判重
@@ -1793,8 +1825,7 @@ async function injectTop(top, src) {
   } finally { live.injecting = false; }
   const entry = { round: live.round, text: (src === "auto" ? "【自动】" : "") + top.text, votes: top.votes, src: src === "auto" ? "auto" : (top.src || "?"), at: Date.now(), status: "running" };
   for (const e of live.executed) if (e.status === "running") e.status = "done"; // 新一轮开始→旧的「执行中」视为完成(避免永久卡在执行中)
-  live.executed.push(entry);
-  if (live.executed.length > 200) live.executed = live.executed.slice(-200);
+  recordExecuted(entry);
   live.currentRun = entry;
   live.lastSentText = top.text;
   live.lastInjectAt = entry.at;
@@ -2238,7 +2269,9 @@ const server = createServer(async (req, res) => {
 
   // 直播投票:榜单页 + 状态(SSE) + 管理(POST,需 token);读写都在只读校验之前
   if (pathname === "/__board") return serveBoard(req, res);
+  if (pathname === "/__history") return serveHistoryPage(req, res);
   if (pathname === "/__lb/state") return json(res, publicState());
+  if (pathname === "/__lb/history") return serveHistoryJson(req, res, url);
   // 工作台回报预览 iframe 的真实路径 → 让 live.page 准确(click 导航后也能跟上)
   if (pathname === "/__lb/page") {
     if (req.method !== "POST") return send(res, 405, "method not allowed");
