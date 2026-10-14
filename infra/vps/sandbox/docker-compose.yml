@@ -53,6 +53,7 @@ services:
     # 注意:这里**不要** env_file: .env —— 会把无关密钥注入这个匿名可玩的容器。
     # 只传它真正需要的网关令牌,由 compose 从本目录 .env 插值 ${PLAYGROUND_AI_TOKEN}。
     environment:
+      TZ: ${TZ:-Asia/Shanghai}
       # 博客 AI 网关令牌(博客 admin「AI 密钥」页签发:每日 token 上限 + 便宜模型)
       ZX_AI_APP_TOKEN: ${PLAYGROUND_AI_TOKEN:-}
       # opencode v2.0.x 绑 0.0.0.0 时强制 Basic 鉴权;这里固定密码,由边缘 Caddy
