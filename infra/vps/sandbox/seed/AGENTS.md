@@ -29,6 +29,20 @@
   - **不要**做违规抓取或 iframe 嵌入，也**不要**直连外部站点（会被 CORS 挡）。
   - 手机优先、大字、打开就能用，带默认示例（直播时自动演示）。
 
+## 常驻大项目：AI 模型情报站（长期维护）
+
+- **目标**：一个**长期维护、自动更新**的网站，汇总各大模型/平台的：价格（输入/输出/每百万 token）、套餐费用（Plus/Pro/包月/API）、
+  纳入的模型清单、模型能力（上下文/多模态/工具调用）、模型效果与榜单、新闻与政策（发布/降价/限额）、免费额度。
+- **数据源（免费、无需 key）**：
+  - `https://openrouter.ai/api/v1/models` → 462+ 模型的 `id/name/context_length/pricing.prompt/pricing.completion/
+    architecture/supported_parameters/knowledge_cutoff/expiration_date/links`（**实时、权威**）。后端可直连，前端用 `__fetch` 代理。
+- **架构**：后端 `/workspace/server.js`（端口 **8000**；把 `node server.js` 写进 `/workspace/.sandbox-backend`，沙盒会自动拉起/自愈）。
+  后端**每 30 分钟**抓一次 OpenRouter → 存 `data.json`；提供 `/api/models`、`/api/plans`、`/api/news`、`/api/meta`（含 `updatedAt`）。
+  前端用**相对路径** `fetch("api/models")`。
+- **页面**：总览 · 比价（按输入价/输出价排序）· 套餐对比 · 能力筛选（上下文/多模态/工具调用）· 新闻政策 · 更新时间；
+  首页加一张「AI 模型情报站」大卡片。
+- **每轮迭代**：扩充维度 / 增加数据来源 / 优化界面 / 修正数据。
+
 ## 观众不能直接操作网页（重要）
 
 - 观众**只能看直播画面**，**无法点击 / 拖动 / 输入**网页。**别做「必须观众动手才有反应」的东西**

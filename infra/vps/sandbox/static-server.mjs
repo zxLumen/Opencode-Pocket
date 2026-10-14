@@ -599,6 +599,7 @@ const AUTO_CREATE_MS = Number(process.env.PLAYGROUND_AUTO_CREATE_INTERVAL_SEC ||
 const AUTO_CREATE_MAX = Number(process.env.PLAYGROUND_AUTO_CREATE_MAX || 0); // 0 = 不限
 const AUTO_FOCUS_MIN = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MIN || 3)); // 聚焦最少停留轮数
 const AUTO_FOCUS_MAX = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MAX || 6)); // 聚焦软上限(到点建议换)
+const AUTO_PROJECT = (process.env.PLAYGROUND_AUTO_PROJECT || "").trim(); // 常驻大项目:自动创作长期服务于它
 const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "生活化便民(吃穿住行玩买/健康/家庭),并接入外部平台:本地生活(附近吃喝玩乐·外卖·团购)、购物比价与优惠(淘宝/京东/拼多多)、出行(高德/百度地图·公交地铁·打车·12306)、天气与空气质量、生活缴费与快递查询、健康与用药提醒、家庭记账/菜谱/纪念日、招聘租房";
 const AUTO_WEB = process.env.PLAYGROUND_AUTO_WEB !== "0"; // 允许在任务里提示 agent 先联网找灵感
 const YT_API_KEY = process.env.YT_API_KEY || "";
@@ -1879,6 +1880,7 @@ async function proposePlan() {
     const sys = "你是无人值守的直播导演,站在【观众视角】安排下一轮(观众只能看到右侧预览的一屏)。\n" +
       "【动作二选一】improve=挑一个现有页面做**有创意**的升级(优先新玩法/交互/可视化,少做纯样式微调);create=**从零做一个全新的东西**(新页面/新玩法/新工具),并在首页加入口。\n" +
       "【创作取向】优先:" + AUTO_STYLE + "。\n" +
+      (AUTO_PROJECT ? "【常驻项目·最高优先】" + AUTO_PROJECT + "\n  → 这一轮**必须服务于这个项目**:优先 improve 项目页面 / 扩充项目的数据与维度 / 优化项目界面;不要另起无关新主题。\n" : "") +
       "【拒绝奶头乐,重要】**不要**做「点击得分/接住/躲避/跑酷/打怪/连连看」这类纯消遣小游戏,也不要只堆粒子特效刷屏。\n" +
       "【生活化·接入外部平台,重要】主题要**贴近日常生活**(吃穿住行玩买/健康/家庭/本地生活),**不要**做成程序员工具。要**接入外部平台内容**:\n" +
       "  ① 能用**深链跳转**就用:淘宝 `https://s.taobao.com/search?q=关键词`、京东 `https://search.jd.com/Search?keyword=关键词`、美团 `https://www.meituan.com/s/关键词`、大众点评 `https://www.dianping.com/search/keyword/1/0_关键词`、高德 `https://uri.amap.com/search?keyword=关键词`、百度 `https://www.baidu.com/s?wd=关键词`、12306 等;\n" +
