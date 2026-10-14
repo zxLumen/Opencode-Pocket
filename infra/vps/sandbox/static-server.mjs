@@ -2097,6 +2097,11 @@ async function autoQueueLoop() {
     if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) continue;
     if (AUTO_CREATE_MAX > 0 && autoCount >= AUTO_CREATE_MAX) continue;
     if (live.options.length) continue; // 票池非空(观众票 或 已有"下一个计划")
+    // 等间隔/展示停顿期间:不要往票池里放"自动"项(等要开跑时再放)
+    live.autoTimes = (live.autoTimes || []).filter((t) => Date.now() - t < 3600 * 1000);
+    const lastAutoQ = live.autoTimes.length ? live.autoTimes[live.autoTimes.length - 1] : 0;
+    if (Date.now() < (live.holdUntil || 0)) continue;
+    if (AUTO_MIN_INTERVAL_MS > 0 && lastAutoQ && Date.now() - lastAutoQ < AUTO_MIN_INTERVAL_MS) continue;
     // 聚焦指向的页面已被删除/还原 → 丢弃聚焦,重新选题(否则会一直改一个不存在的页面)
     if (live.focus && live.focus.action === "improve" && live.focus.page) {
       let exists = true;
@@ -2594,6 +2599,13 @@ async function stallLoop() {
       if (!injectSince) injectSince = Date.now();
       else if (Date.now() - injectSince > 90000) { console.warn("[live] 注入疑似卡死 → 复位 injecting"); live.injecting = false; injectSince = 0; }
     } else injectSince = 0;
+    // 等间隔/停顿期间:票池里不该留着"自动"项(看起来像一直挂着没人接)
+    if (!live.injecting && live.options.some((o) => o.kind === "auto")) {
+      live.autoTimes = (live.autoTimes || []).filter((t) => Date.now() - t < 3600 * 1000);
+      const lastA = live.autoTimes.length ? live.autoTimes[live.autoTimes.length - 1] : 0;
+      const gateOpen = Date.now() >= (live.holdUntil || 0) && !(AUTO_MIN_INTERVAL_MS > 0 && lastA && Date.now() - lastA < AUTO_MIN_INTERVAL_MS);
+      if (!gateOpen) { live.options = live.options.filter((o) => o.kind !== "auto"); console.log("[live] 等间隔期间:移除票池里的自动项"); changed(); }
+    }
     // 平台合规:当前展示页若是金融投资类 → 立刻切走(直播不展示;观众自行访问不受影响)
     if (!live.injecting && live.page && await judgePage(live.page)) {
       const safe = await pickSafePage();
