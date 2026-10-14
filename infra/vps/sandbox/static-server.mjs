@@ -1084,29 +1084,108 @@ async function ytPollOnce() {
   live.chat.lastAt = Date.now();
   return Number(d.pollingIntervalMillis) || 5000;
 }
+// ---------- YouTube innertube(网页接口):读弹幕**不消耗 Data API 配额** ----------
+const YT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+let ytIn = null; // { apiKey, context, continuation, videoId }
+function ytBrace(str, i) { // 从 str[i]=='{' 起做括号匹配,取整个 JSON 对象
+  let d = 0, inStr = false, esc = false;
+  for (let j = i; j < str.length; j++) {
+    const c = str[j];
+    if (inStr) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false; continue; }
+    if (c === '"') inStr = true; else if (c === "{") d++; else if (c === "}") { d--; if (!d) return str.slice(i, j + 1); }
+  }
+  return null;
+}
+async function ytInnertubeInit(videoId) {
+  const r = await fetch("https://www.youtube.com/watch?v=" + encodeURIComponent(videoId) + "&hl=zh-CN", { headers: { "user-agent": YT_UA, "accept-language": "zh-CN,zh;q=0.9" } });
+  if (!r.ok) throw new Error("watch HTTP " + r.status);
+  const h = await r.text();
+  const apiKey = (h.match(/"INNERTUBE_API_KEY":"([^"]+)"/) || [])[1];
+  const ci = h.indexOf('"INNERTUBE_CONTEXT":');
+  let context = null;
+  if (ci >= 0) { try { context = JSON.parse(ytBrace(h, h.indexOf("{", ci))); } catch {} }
+  let cont = null;
+  const li = h.indexOf('"liveChatRenderer"');
+  if (li >= 0) { const m = h.slice(li, li + 8000).match(/"continuationCommand":\{"token":"([^"]+)"/); if (m) cont = m[1]; }
+  if (!cont && apiKey && context) { // 兜底:用 next 接口找聊天 continuation
+    try {
+      const rn = await fetch("https://www.youtube.com/youtubei/v1/next?key=" + encodeURIComponent(apiKey) + "&prettyPrint=false", {
+        method: "POST",
+        headers: { "content-type": "application/json", "user-agent": YT_UA, "accept-language": "zh-CN", origin: "https://www.youtube.com", referer: "https://www.youtube.com/watch?v=" + videoId },
+        body: JSON.stringify({ context, videoId, contentCheckOk: true, racyCheckOk: true }),
+      });
+      const tn = await rn.text();
+      const j = tn.indexOf("liveChatRenderer");
+      if (j >= 0) { const m2 = tn.slice(j, j + 8000).match(/"continuationCommand":\{"token":"([^"]+)"/); if (m2) cont = m2[1]; }
+    } catch {}
+  }
+  if (!apiKey || !context || !cont) throw new Error("innertube 初始化失败(拿不到 key/context/聊天 continuation)");
+  ytIn = { apiKey, context, continuation: cont, videoId };
+  live.chat.chatId = cont;
+  console.log("[live] YouTube innertube 就绪(无配额):", videoId);
+}
+async function ytInnertubePoll() {
+  const r = await fetch("https://www.youtube.com/youtubei/v1/live_chat/get_live_chat?key=" + encodeURIComponent(ytIn.apiKey) + "&prettyPrint=false", {
+    method: "POST",
+    headers: { "content-type": "application/json", "user-agent": YT_UA, "accept-language": "zh-CN", origin: "https://www.youtube.com", referer: "https://www.youtube.com/watch?v=" + ytIn.videoId },
+    body: JSON.stringify({ context: ytIn.context, continuation: ytIn.continuation }),
+  });
+  if (!r.ok) throw new Error("innertube HTTP " + r.status);
+  const d = await r.json();
+  const lc = (d.continuationContents && d.continuationContents.liveChatContinuation) || {};
+  const actions = lc.actions || [];
+  if (!ytPrimed) { for (const a of actions) { const it = a.addChatItemAction && a.addChatItemAction.item; const m = it && (it.liveChatTextMessageRenderer || it.liveChatPaidMessageRenderer); if (m && m.id) rememberSeen(m.id); } ytPrimed = true; }
+  else {
+    for (const a of actions) {
+      const it = a.addChatItemAction && a.addChatItemAction.item; if (!it) continue;
+      const m = it.liveChatTextMessageRenderer || it.liveChatPaidMessageRenderer || it.liveChatMembershipItemRenderer; if (!m) continue;
+      const text = ((m.message && m.message.runs) || []).map((x) => x.text || "").join("").trim();
+      if (!text) continue;
+      if (m.id && seenMessages.has(m.id)) continue;
+      if (m.id) rememberSeen(m.id);
+      const ch = m.authorExternalChannelId || "";
+      const name = (m.authorName && (m.authorName.simpleText || (m.authorName.runs || []).map((x) => x.text).join(""))) || "";
+      if (!allowUser(ch, Date.now())) continue;
+      handleChat(text, ch, name);
+    }
+  }
+  for (const c of lc.continuations || []) { const k = Object.keys(c)[0]; const t = c[k] && c[k].continuation; if (t) { ytIn.continuation = t; break; } }
+  live.chat.connected = true; live.chat.error = null; live.chat.lastAt = Date.now();
+  return 3000;
+}
 async function ytLoop() {
   if (!chatEnabled) { console.log("[live] 未配置 YouTube(YT_API_KEY/YT_VIDEO_ID),跳过弹幕采集"); return; }
+  let mode = "innertube"; // 先试 innertube(无配额);失败退回 Data API(有配额)
   for (;;) {
-    try { live.chat.chatId = await ytResolveChatId(); live.chat.error = null; break; }
-    catch (e) { live.chat.error = String((e && e.message) || e); console.error("[live] 解析 liveChatId:", live.chat.error); await sleep(15000); }
-  }
-  console.log("[live] YouTube 直播聊天已连接:", live.chat.chatId);
-  for (;;) {
-    let delay = 5000;
-    try { delay = await ytPollOnce(); }
-    catch (e) {
+    try {
+      let vid = (YT_VIDEO_ID.match(/[?&]v=([\w-]{6,})/) || [])[1] || YT_VIDEO_ID || "";
+      const cur = await ytFindLiveVideoByPage(); // 免费:抓频道 /live 页找"当前正在直播"
+      if (cur) vid = cur;
+      if (!vid) throw new Error("找不到正在直播的视频");
+      if (mode === "innertube") { live.chat.videoId = vid; await ytInnertubeInit(vid); }
+      else { live.chat.chatId = await ytResolveChatId(); }
+      break;
+    } catch (e) {
       live.chat.error = String((e && e.message) || e);
-      live.chat.connected = false;
+      console.error("[live] YouTube 初始化(" + mode + "):", live.chat.error);
+      if (mode === "innertube") { console.warn("[live] innertube 不可用 → 退回 Data API(会消耗配额)"); mode = "api"; continue; }
+      await sleep(20000);
+    }
+  }
+  console.log("[live] YouTube 直播聊天已连接(" + (mode === "innertube" ? "innertube·无配额" : "Data API·有配额") + "):", live.chat.videoId || live.chat.chatId);
+  for (;;) {
+    try { if (mode === "innertube") await ytInnertubePoll(); else await ytPollOnce(); }
+    catch (e) {
+      live.chat.error = String((e && e.message) || e); live.chat.connected = false;
       console.error("[live] 拉取弹幕:", live.chat.error);
-      // 直播可能已结束/重开 → 重新解析 liveChatId 并清游标,重开播后能自动恢复(无需重启沙盒)
-      try {
-        const nid = await ytResolveChatId();
-        if (nid !== live.chat.chatId) { live.chat.chatId = nid; ytToken = null; ytPrimed = false; console.log("[live] YouTube 聊天已更新:", nid); }
-      } catch (e2) { /* 直播还没开始,忽略 */ }
-      delay = 15000;
+      try { // 直播可能已结束/重开 → 重新初始化
+        if (mode === "innertube") { const vid = (await ytFindLiveVideoByPage()) || live.chat.videoId; live.chat.videoId = vid; ytPrimed = false; await ytInnertubeInit(vid); }
+        else { live.chat.chatId = await ytResolveChatId(); }
+      } catch (e2) {}
     }
     broadcastLive();
-    await sleep(YT_POLL_MS || Math.min(10000, Math.max(2000, delay)));
+    // innertube 可 3s 一次;Data API 受配额限制 → 10s 一次(约 1 单位/次,一天 1 万够)
+    await sleep(YT_POLL_MS || (mode === "innertube" ? 3000 : 10000));
   }
 }
 
