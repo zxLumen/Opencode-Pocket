@@ -604,12 +604,22 @@ const VIEW_PAUSE_MS = Number(process.env.PLAYGROUND_VIEW_PAUSE_SEC || 25) * 1000
 // 策略:**页面保留**(观众可自行从预览站访问),但**直播预览绝不切进去**(禁止 goto 到金融类页面)。
 const FINANCE_RE = /(股票|炒股|股民|A股|港股|美股|大盘|个股|行情|涨跌|涨停|跌停|K线|均线|证券|券商|开户|基金|债券|期货|期权|外汇|汇市|虚拟货币|加密货币|数字货币|比特币|以太坊|挖矿|理财|投资|投顾|资管|私募|保险|保费|贷款|网贷|信贷|信用卡|财报|市盈率|市净率|资金流|龙虎榜|博彩|彩票|赌博|下注)/;
 const noShowCache = new Map(); // 页面 -> 是否"直播不可展示"(金融投资类)
+const NO_SHOW_NAME_RE = /(ashare|stock|fund|finance|invest|kline|quote|gupiao|zhengquan|licai|baoxian|daikuan)/i;
 async function isNoShowPage(page) {
   if (!page) return false;
-  if (noShowCache.has(page)) return noShowCache.get(page);
-  let v = FINANCE_RE.test(page);
-  if (!v) { try { const h = await readFile(join(WORKSPACE, page), "utf8"); v = FINANCE_RE.test(((h.match(/<title>([^<]*)<\/title>/i) || [])[1] || "") + h.slice(0, 6000)); } catch {} }
-  noShowCache.set(page, v);
+  const hit = noShowCache.get(page);
+  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.v; // 10 分钟缓存(页面可能被改)
+  let v = NO_SHOW_NAME_RE.test(String(page)) || FINANCE_RE.test(String(page));
+  if (!v) {
+    try {
+      const h = await readFile(join(WORKSPACE, page), "utf8");
+      // 关键:去掉所有空白再匹配(标题常写成"A 股"这种带空格的)
+      const txt = (((h.match(/<title>([^<]*)<\/title>/i) || [])[1] || "") + h.slice(0, 12000)).replace(/\s+/g, "");
+      v = FINANCE_RE.test(txt);
+    } catch {}
+  }
+  if (noShowCache.size > 300) noShowCache.clear();
+  noShowCache.set(page, { v: v, at: Date.now() });
   return v;
 }
 const FOLLOWUP_MAX = Math.max(1, Number(process.env.PLAYGROUND_FOLLOWUP_ROUNDS || 6)); // 观众提了方向后,自动开发"沿着它辅助"的轮数 // 每轮跑完留给观众"看结果"的停顿(期间不接新任务)
@@ -2531,6 +2541,12 @@ async function stallLoop() {
       if (!injectSince) injectSince = Date.now();
       else if (Date.now() - injectSince > 90000) { console.warn("[live] 注入疑似卡死 → 复位 injecting"); live.injecting = false; injectSince = 0; }
     } else injectSince = 0;
+    // 平台合规:当前展示页若是金融投资类 → 立刻切走(直播不展示;观众自行访问不受影响)
+    if (!live.injecting && live.page && await isNoShowPage(live.page)) {
+      console.log("[live] 当前展示页是金融投资类,切走 →", live.page);
+      enqueueSiteAuto({ type: "goto", path: "index.html" });
+      await sleep(6000);
+    }
     // 单轮超时:一个自调参/长循环任务把直播卡住 → 中断并接下一棒
     if (MAX_RUN_MS > 0 && live.session === "running" && !live.injecting && live.lastInjectAt && Date.now() - live.lastInjectAt > MAX_RUN_MS) {
       console.warn("[live] 单轮超时", Math.round((Date.now() - live.lastInjectAt) / 1000), "s → 中断并接下一棒");
