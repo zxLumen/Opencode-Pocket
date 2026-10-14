@@ -812,6 +812,7 @@ function trimOptions() {
 function handleChat(text, channelId, name) {
   const t = String(text || "").trim();
   if (!t) return;
+  live.chat.lastDanmakuAt = Date.now(); // 任何来源(B站/YouTube/上报)的弹幕都记时间(榜单显示"最后弹幕")
   if (live.questionVote) { qvVote(t, channelId || "anon:" + Math.random().toString(36).slice(2, 8)); return; }
   console.log("[live] 弹幕[" + srcLabel(channelId) + "] " + (name ? name + " " : "") + t.slice(0, 60));
   const n = parsePick(t);
