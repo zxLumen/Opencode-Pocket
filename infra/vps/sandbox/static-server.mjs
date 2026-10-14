@@ -1765,35 +1765,43 @@ async function waitIdle(timeoutMs) {
     await sleep(2000);
   }
 }
-async function autoCreateLoop() {
+// 排队器(独立循环):票池空就把"下一个计划"提前放进票池 —— 不受注入间隔/长任务影响
+let autoCount = 0;
+async function autoQueueLoop() {
   if (!AUTO_CREATE) return;
-  console.log("[live] 空闲自动创作已启用: 间隔", Math.round(AUTO_CREATE_MS / 1000), "s, 聚焦", AUTO_FOCUS_MIN + "-" + AUTO_FOCUS_MAX, "轮, 页面操作", SITE_CMD_ENABLED ? "允许" : "关闭");
-  let count = 0;
   for (;;) {
     await sleep(5000);
     if (!LIVE_ENABLED || !live.autoDirect) continue;
     if (live.blocked) continue;
     if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) continue;
-    if (AUTO_CREATE_MAX > 0 && count >= AUTO_CREATE_MAX) continue;
-    // 票池空 → 立刻提前想好**并放进票池**(观众提前看到下一个计划);不受"注入间隔"限制
-    if (!live.options.length) {
-      // 聚焦指向的页面已被删除/还原 → 丢弃聚焦,重新选题(否则会一直改一个不存在的页面)
-      if (live.focus && live.focus.action === "improve" && live.focus.page) {
-        let exists = true;
-        try { await access(join(WORKSPACE, live.focus.page)); } catch { exists = false; }
-        if (!exists) { console.log("[live] 聚焦页面已不存在,丢弃聚焦 →", live.focus.page); live.focus = null; }
-      }
-      const p = await proposePlan();
-      if (p && p.task) {
-        const text = (p.action === "create" ? "【新建】" : (p.page ? "【改造 " + p.page + "】" : "【改造】")) + p.task + (AUTO_WEB ? "（可先联网检索、参考当下流行玩法/设计再动手）" : "");
-        const same = live.focus && live.focus.action === p.action && (live.focus.page || "") === (p.page || "");
-        live.focus = { action: p.action, page: p.page, title: p.title || (same && live.focus.title) || "", rounds: same ? (live.focus.rounds || 1) + 1 : 1, at: Date.now() };
-        live.options.push({ id: newOptId(), text: text, norm: normText(text) || text, kind: "auto", votes: 1, voters: ["auto"], src: "auto", createdAt: Date.now(), plan: { action: p.action, page: p.page, title: p.title || "", task: p.task, before: p.before || null, after: p.after || null } });
-        console.log("[live] 自动创作提前入池(观众可见)[" + (p.action === "create" ? "新建" : "改造 " + (p.page || "")) + "] 聚焦第", live.focus.rounds, "轮:", p.task, "| before=" + JSON.stringify(p.before || null) + " after=" + JSON.stringify(p.after || null));
-        changed();
-      }
+    if (AUTO_CREATE_MAX > 0 && autoCount >= AUTO_CREATE_MAX) continue;
+    if (live.options.length) continue; // 票池非空(观众票 或 已有"下一个计划")
+    // 聚焦指向的页面已被删除/还原 → 丢弃聚焦,重新选题(否则会一直改一个不存在的页面)
+    if (live.focus && live.focus.action === "improve" && live.focus.page) {
+      let exists = true;
+      try { await access(join(WORKSPACE, live.focus.page)); } catch { exists = false; }
+      if (!exists) { console.log("[live] 聚焦页面已不存在,丢弃聚焦 →", live.focus.page); live.focus = null; }
     }
-    if (Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue; // 注入仍按间隔,但"入池"已经提前做了
+    const p = await proposePlan();
+    if (!p || !p.task) continue;
+    const text = (p.action === "create" ? "【新建】" : (p.page ? "【改造 " + p.page + "】" : "【改造】")) + p.task + (AUTO_WEB ? "（可先联网检索、参考当下流行玩法/设计再动手）" : "");
+    const same = live.focus && live.focus.action === p.action && (live.focus.page || "") === (p.page || "");
+    live.focus = { action: p.action, page: p.page, title: p.title || (same && live.focus.title) || "", rounds: same ? (live.focus.rounds || 1) + 1 : 1, at: Date.now() };
+    live.options.push({ id: newOptId(), text: text, norm: normText(text) || text, kind: "auto", votes: 1, voters: ["auto"], src: "auto", createdAt: Date.now(), plan: { action: p.action, page: p.page, title: p.title || "", task: p.task, before: p.before || null, after: p.after || null } });
+    console.log("[live] 自动创作提前入池(观众可见)[" + (p.action === "create" ? "新建" : "改造 " + (p.page || "")) + "] 聚焦第", live.focus.rounds, "轮:", p.task, "| before=" + JSON.stringify(p.before || null) + " after=" + JSON.stringify(p.after || null));
+    changed();
+  }
+}
+async function autoCreateLoop() {
+  if (!AUTO_CREATE) return;
+  console.log("[live] 空闲自动创作已启用: 间隔", Math.round(AUTO_CREATE_MS / 1000), "s, 聚焦", AUTO_FOCUS_MIN + "-" + AUTO_FOCUS_MAX, "轮, 页面操作", SITE_CMD_ENABLED ? "允许" : "关闭");
+  for (;;) {
+    await sleep(5000);
+    if (!LIVE_ENABLED || !live.autoDirect) continue;
+    if (live.blocked) continue;
+    if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) continue;
+    if (AUTO_CREATE_MAX > 0 && autoCount >= AUTO_CREATE_MAX) continue;
+    if (Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue; // 开跑按间隔(入池由排队器随时做)
     if (live.session !== "idle") continue;
     if (live.injecting) continue;
     if (live.options.some((o) => o.kind !== "auto")) continue; // 有观众票 → 让位,不抢
@@ -1808,7 +1816,7 @@ async function autoCreateLoop() {
     // 2) task:交给 AI 做(injectTop 会把它从票池移除并记入已执行)
     const ok = await injectTop(opt, "auto");
     if (!ok) continue;
-    count++;
+    autoCount++;
     // 3) 等这轮跑完
     await waitIdle(180000);
     // 4) after:切过去让观众看到效果 —— 同样并入票池(观众可见/可投票)
@@ -2228,7 +2236,7 @@ function startLive() {
   if (CHAT_SOURCES.includes("youtube")) ytLoop();
   if (CHAT_SOURCES.includes("ingest")) console.log("[live] 弹幕上报(ingest)已启用:POST /__lb/ingest");
   if (!CHAT_SOURCES.includes("bilibili") && !CHAT_SOURCES.includes("youtube") && !CHAT_SOURCES.includes("ingest")) console.log("[live] 未配置弹幕源(YT_API_KEY/YT_VIDEO_ID 或 BILI_ROOM_ID;也可用 ingest 上报)");
-  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); siteIntentLoop(); guideLoop(); audienceLoop(); autoCreateLoop(); sessionEventLoop(); sessionPollLoop(); stallLoop();
+  mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); siteIntentLoop(); guideLoop(); audienceLoop(); autoQueueLoop(); autoCreateLoop(); sessionEventLoop(); sessionPollLoop(); stallLoop();
   console.log("[live] 直播投票已启动: 轮次=", live.round, "自动接棒=", live.autoDirect, "最小票数=", MIN_VOTES, "自动合并=", MERGE_ENABLED);
   setTimeout(maybeInject, 5000); // 重启后若已有票且会话空闲,补接一轮
 }
