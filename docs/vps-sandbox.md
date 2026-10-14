@@ -438,6 +438,8 @@ Xvfb(虚拟屏 1280x720)
 | 端点 | 用途 |
 | --- | --- |
 | `GET /board` | 直播投票榜页（实时票榜 + 已实行；`?embed=1` 供工作台内嵌） |
+| `GET /history` | **历史票选页**（全部归档：弹幕 + 已执行，可筛选/搜索/导出 CSV·JSON） |
+| `GET /__lb/history` | 历史归档 JSON（`?limit=N`，默认 3000）；数据存 `history.jsonl`（追加不覆盖） |
 | `GET /__lb/state` | 当前状态 JSON（轮次/会话/票榜/已实行/开关） |
 | `GET /__lb/events` | 状态 SSE（榜单毫秒级刷新） |
 | `POST /__lb/admin` | 管理：`start`/`pause`/`reset`（清票池+聚焦）/`reset-all`（清票池+已执行+聚焦+提问）/`send`/`clear-executed`/`add`；请求头 `x-admin-token` |

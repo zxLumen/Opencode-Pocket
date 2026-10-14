@@ -510,7 +510,19 @@ async function servePreview(req, res, pathname, search) {
 
   // ② 其余(不存在的前端资源 / API / 写请求)→ 反代到访客后端(约定端口 8000)
   if (await appUp()) return proxyToApp(req, res, "/" + rel, search);
-  return notFound(res);
+  // 页面还没生成(会话正在做/写错名)→ 给友好页并自动重试,别让预览变 404 空白
+  return send(res, 200, previewMissing(rel), { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+}
+function previewMissing(rel) {
+  const safe = String(rel || "").replace(/[<>&"]/g, "");
+  return "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">" +
+    "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>页面生成中…</title>" +
+    "<meta http-equiv=\"refresh\" content=\"3\"></head>" +
+    "<body style=\"margin:0;height:100vh;display:grid;place-items:center;background:#0b1016;color:#e8eef6;font:16px/1.6 -apple-system,'PingFang SC',system-ui,sans-serif\">" +
+    "<div style=\"text-align:center;padding:20px\"><div style=\"font-size:36px\">🛠️</div>" +
+    "<div style=\"font-size:20px;font-weight:700;margin:8px 0\">页面正在生成中…</div>" +
+    "<div style=\"color:#8aa0b6\">「" + safe + "」还没做好 · 3 秒后自动重试 · " +
+    "<a style=\"color:#93c5fd\" href=\"/preview/\">回首页</a></div></div></body></html>";
 }
 
 // =====================================================================
@@ -618,7 +630,6 @@ let live = {
   siteSeq: 0,
   page: "index.html", // 观众当前展示的页面(默认=首页;每次 goto 更新;仅作提示喂给模型,不做任何强制)
   lastViewOp: null, // 最近一次"观众视角校验"补的操作 {key,at}(去重,避免反复补同一个)
-  autoPlan: null, // 票池空时提前 propose 好的下一件事(空闲即用,省掉现调模型的等待)
   siteFirstAt: null,
   focus: null, // 自动创作聚焦 { action, page, title, rounds }
   guide: null, // { examples:[...], at }
@@ -1311,6 +1322,19 @@ async function siteTick() {
   const top = sites.slice().sort((a, b) => b.votes - a.votes || a.createdAt - b.createdAt)[0];
   let cmd = {};
   try { cmd = JSON.parse(top.cmd || "{}"); } catch {}
+  // 目标页还没生成/写错名 → 不跳转,避免预览变 404 空白
+  if (cmd.type === "goto" && cmd.path) {
+    let okFile = false;
+    try { const st = await stat(join(WORKSPACE, cmd.path)); okFile = st.isFile(); } catch {}
+    if (!okFile) {
+      console.warn("[live] 目标页还不存在,跳过跳转:", cmd.path);
+      recordExecuted({ round: live.round, text: top.text + " (跳过:页面还没生成)", votes: top.votes, src: top.src || "?", at: Date.now(), status: "failed" });
+      live.options = live.options.filter((o) => o !== top);
+      live.siteFirstAt = null;
+      changed();
+      return;
+    }
+  }
   live.site = { seq: (live.siteSeq = (live.siteSeq || 0) + 1), ...cmd };
   if (cmd.type === "goto" && cmd.path) live.page = cmd.path; // 仅记录观众当前在哪页(供模型参考)
   recordExecuted({ round: live.round, text: top.text, votes: top.votes, src: top.src || "?", at: Date.now(), status: "done" });
@@ -1463,7 +1487,7 @@ async function genGuide() {
 async function guideLoop() {
   if (!GUIDE_ENABLED) return;
   for (;;) {
-    try { if (!live.options.some((o) => !o.sent) && !live.questionVote && (!live.guide || Date.now() - live.guide.at > GUIDE_INTERVAL_MS)) await genGuide(); } catch {}
+    try { if (!live.options.some((o) => !o.sent && o.kind !== "auto") && !live.questionVote && (!live.guide || Date.now() - live.guide.at > GUIDE_INTERVAL_MS)) await genGuide(); } catch {}
     await sleep(GUIDE_INTERVAL_MS);
   }
 }
@@ -1521,7 +1545,7 @@ async function askLoop() {
   }
 }
 function topOption() {
-  const s = activeOptions().filter((o) => (o.kind || "opinion") !== "site");
+  const s = activeOptions().filter((o) => (o.kind || "opinion") !== "site" && o.kind !== "auto");
   return s.length ? s[0] : null;
 }
 function finishRun(kind) {
@@ -1739,33 +1763,37 @@ async function autoCreateLoop() {
     if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) continue;
     if (AUTO_CREATE_MAX > 0 && count >= AUTO_CREATE_MAX) continue;
     if (Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue;
-    // 票池空时"提前"把下一件事 propose 好(会话还在跑也没关系)→ 空闲时立刻接棒,不用现等模型
-    if (!live.autoPlan && !live.options.length) {
+    // 票池空 → 提前想好**并放进票池**(观众提前看到下一个计划);会话还在跑也不影响
+    if (!live.options.length) {
       // 聚焦指向的页面已被删除/还原 → 丢弃聚焦,重新选题(否则会一直改一个不存在的页面)
       if (live.focus && live.focus.action === "improve" && live.focus.page) {
         let exists = true;
         try { await access(join(WORKSPACE, live.focus.page)); } catch { exists = false; }
         if (!exists) { console.log("[live] 聚焦页面已不存在,丢弃聚焦 →", live.focus.page); live.focus = null; }
       }
-      live.autoPlan = await proposePlan();
-      if (live.autoPlan) console.log("[live] 自动创作提前 propose:", String(live.autoPlan.task || "").slice(0, 60));
+      const p = await proposePlan();
+      if (p && p.task) {
+        const text = (p.action === "create" ? "【新建】" : (p.page ? "【改造 " + p.page + "】" : "【改造】")) + p.task + (AUTO_WEB ? "（可先联网检索、参考当下流行玩法/设计再动手）" : "");
+        const same = live.focus && live.focus.action === p.action && (live.focus.page || "") === (p.page || "");
+        live.focus = { action: p.action, page: p.page, title: p.title || (same && live.focus.title) || "", rounds: same ? (live.focus.rounds || 1) + 1 : 1, at: Date.now() };
+        live.options.push({ id: newOptId(), text: text, norm: normText(text) || text, kind: "auto", votes: 1, voters: ["auto"], src: "auto", createdAt: Date.now(), plan: { action: p.action, page: p.page, title: p.title || "", task: p.task, before: p.before || null, after: p.after || null } });
+        console.log("[live] 自动创作提前入池(观众可见)[" + (p.action === "create" ? "新建" : "改造 " + (p.page || "")) + "] 聚焦第", live.focus.rounds, "轮:", p.task, "| before=" + JSON.stringify(p.before || null) + " after=" + JSON.stringify(p.after || null));
+        changed();
+      }
     }
     if (live.session !== "idle") continue;
     if (live.injecting) continue;
-    if (live.options.length) continue; // 有票就不抢,优先观众
-    const plan = live.autoPlan || await proposePlan();
-    live.autoPlan = null;
-    if (!plan || !plan.task) continue;
-    const taskText = (plan.action === "create" ? "【新建】" : (plan.page ? "【改造 " + plan.page + "】" : "【改造】")) + plan.task + (AUTO_WEB ? "（可先联网检索、参考当下流行玩法/设计再动手）" : "");
-    if (taskText === live.lastSentText) continue;
-    const same = live.focus && live.focus.action === plan.action && (live.focus.page || "") === (plan.page || "");
-    live.focus = { action: plan.action, page: plan.page, title: plan.title || (same && live.focus.title) || "", rounds: same ? (live.focus.rounds || 1) + 1 : 1, at: Date.now() };
-    console.log("[live] 空闲自动创作[" + (plan.action === "create" ? "新建" : "改造 " + (plan.page || "")) + "] 聚焦第", live.focus.rounds, "轮:", plan.task, "| before=" + JSON.stringify(plan.before || null) + " after=" + JSON.stringify(plan.after || null));
+    if (live.options.some((o) => o.kind !== "auto")) continue; // 有观众票 → 让位,不抢
+    const opt = live.options.find((o) => o.kind === "auto");
+    if (!opt) continue;
+    if (opt.text === live.lastSentText) continue;
+    const plan = opt.plan || {};
+    console.log("[live] 自动创作执行(从票池取出):", opt.text.slice(0, 60));
     // 1) before:先把观众视角切到相关页面/位置 —— 并入票池(kind:site),观众可见,按 SITE_VOTE_MS 用票首执行
     if (plan.action === "improve" && plan.page) live.page = plan.page; // 整轮都展示目标页(中途重载也回它)
     if (plan.before && SITE_CMD_ENABLED) { enqueueSiteAuto(plan.before); await sleep(SITE_VOTE_MS + 1500); }
-    // 2) task:交给 AI 做(带上目标页/动作)
-    const ok = await injectTop({ text: taskText, votes: 1, voters: [] }, "auto");
+    // 2) task:交给 AI 做(injectTop 会把它从票池移除并记入已执行)
+    const ok = await injectTop(opt, "auto");
     if (!ok) continue;
     count++;
     // 3) 等这轮跑完
@@ -1776,7 +1804,7 @@ async function autoCreateLoop() {
     for (let k = 0; k < 1; k++) {
       await sleep(SITE_VOTE_MS + 1500);
       if (!SITE_CMD_ENABLED) break;
-      const op = await verifyView(plan.task, plan.page || live.page);
+      const op = await verifyView(plan.task || opt.text, plan.page || live.page);
       if (!op) break;
       const key = JSON.stringify(op);
       if (live.lastViewOp && live.lastViewOp.key === key && Date.now() - live.lastViewOp.at < 180000) { console.log("[live] 观众视角校验:同一操作近期已执行,跳过"); break; }
@@ -1849,7 +1877,7 @@ function maybeInject() {
   if (live.session !== "idle") return;
   if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) return;
   if (Date.now() - live.lastInjectAt < COOLDOWN_MS) return;
-  const list = sortedOptions().filter((o) => !o.sent && o.votes >= MIN_VOTES && (o.kind || "opinion") !== "site");
+  const list = sortedOptions().filter((o) => !o.sent && o.votes >= MIN_VOTES && (o.kind || "opinion") !== "site" && o.kind !== "auto");
   if (!list.length) return;
   // 顺延:优先取票数最高、且不是「上一条刚发过」的那条;若全都相同则兜底照发票王(绝不卡死)
   let top = list.find((o) => o.text !== live.lastSentText);
