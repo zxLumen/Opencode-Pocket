@@ -592,7 +592,7 @@ let live = {
   focus: null, // 自动创作聚焦 { action, page, title, rounds }
   guide: null, // { examples:[...], at }
   audience: {}, // channelId -> { name, at, votes }
-  chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, loggedIn: Boolean(BILI_SESSDATA), chatId: null, videoId: YT_VIDEO_ID || null, detail: [CHAT_SOURCES.includes("bilibili") && BILI_ROOM_ID ? "bili:" + BILI_ROOM_ID : "", CHAT_SOURCES.includes("youtube") && YT_VIDEO_ID ? "yt:" + YT_VIDEO_ID : "", CHAT_SOURCES.includes("ingest") ? "ingest" : ""].filter(Boolean).join(" ") || null, lastAt: 0, error: null },
+  chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, loggedIn: Boolean(BILI_SESSDATA), chatId: null, videoId: YT_VIDEO_ID || null, detail: [CHAT_SOURCES.includes("bilibili") && BILI_ROOM_ID ? "bili:" + BILI_ROOM_ID : "", CHAT_SOURCES.includes("youtube") && YT_VIDEO_ID ? "yt:" + YT_VIDEO_ID : "", CHAT_SOURCES.includes("ingest") ? "ingest" : ""].filter(Boolean).join(" ") || null, lastAt: 0, lastDanmakuAt: 0, liveStatus: null, liveStatusAt: 0, error: null },
 };
 
 async function loadLive() {
@@ -654,7 +654,7 @@ function publicState() {
     maxRounds: MAX_ROUNDS,
     merge: MERGE_ENABLED,
     moderate: MODERATE_MODE,
-    chat: { source: live.chat.source, enabled: live.chat.enabled, connected: live.chat.connected, loggedIn: live.chat.loggedIn, lastAt: live.chat.lastAt, error: live.chat.error, detail: live.chat.detail, videoId: live.chat.videoId },
+    chat: { source: live.chat.source, enabled: live.chat.enabled, connected: live.chat.connected, loggedIn: live.chat.loggedIn, lastAt: live.chat.lastAt, lastDanmakuAt: live.chat.lastDanmakuAt, liveStatus: live.chat.liveStatus, liveStatusAt: live.chat.liveStatusAt, error: live.chat.error, detail: live.chat.detail, videoId: live.chat.videoId },
     options,
     leader,
     executed: live.executed.slice(-40).reverse(),
@@ -1984,13 +1984,21 @@ function biliHandlePayload(buf) {
     if (!text) continue;
     let obj;
     try { obj = JSON.parse(text); } catch { continue; }
-    if (!obj || typeof obj.cmd !== "string" || obj.cmd.indexOf("DANMU_MSG") !== 0) continue;
+    if (!obj || typeof obj.cmd !== "string") continue;
+    if (obj.cmd === "PREPARING") { // B站 下播/断流时会下发 PREPARING
+      live.chat.liveStatus = 0; live.chat.liveStatusAt = Date.now();
+      console.warn("[live] B站 下播/断流(PREPARING)", new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+      broadcastLive();
+      continue;
+    }
+    if (obj.cmd.indexOf("DANMU_MSG") !== 0) continue;
     const info = obj.info || [];
     const msg = info[1];
     const uid = (info[2] && info[2][0]) || 0;
     const uname = (info[2] && info[2][1]) || "";
     if (typeof msg !== "string" || !msg) continue;
     live.chat.lastAt = Date.now();
+    live.chat.lastDanmakuAt = Date.now();
     const ch = uid ? "bili:" + uid : "";
     if (!allowUser(ch, Date.now())) continue;
     handleChat(msg, ch, uname);
@@ -2094,6 +2102,29 @@ async function biliLoop() {
   }
 }
 
+// B站 开播/断播监控:定时查 live_status(0未开播/1直播中/2轮播),变化时记日志+广播 → 榜单能显示"啥时候断的"
+async function biliRoomStatus(room) {
+  const r = await fetch(BILI_API + "/room/v1/Room/get_info?room_id=" + encodeURIComponent(room), { headers: { accept: "application/json", "user-agent": BILI_UA } });
+  if (!r.ok) throw new Error("room_info HTTP " + r.status);
+  const d = await r.json();
+  if (d.code !== 0 || !d.data) throw new Error("room_info code " + d.code);
+  return Number(d.data.live_status);
+}
+async function biliStatusLoop() {
+  if (!BILI_ROOM_ID) return;
+  for (;;) {
+    try {
+      const st = await biliRoomStatus(BILI_ROOM_ID);
+      if (st !== live.chat.liveStatus) {
+        live.chat.liveStatus = st; live.chat.liveStatusAt = Date.now();
+        console.log("[live] B站 直播状态 →", st === 1 ? "直播中" : st === 2 ? "轮播" : "未开播", new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+        broadcastLive();
+      }
+    } catch {}
+    await sleep(30000);
+  }
+}
+
 // 兜底看门狗:极端情况下注入卡住(injecting 长期为真)时释放,避免投票与自动创作全体停摆。
 // 会话卡在 running 由 sessionPollLoop 轮询自愈;question 无人投票由 qvTick 兜底作答。
 let injectSince = 0;
@@ -2114,7 +2145,7 @@ async function stallLoop() {
 
 function startLive() {
   if (!LIVE_ENABLED) { console.log("[live] 已禁用(PLAYGROUND_LIVE=0)"); return; }
-  if (CHAT_SOURCES.includes("bilibili")) biliLoop();
+  if (CHAT_SOURCES.includes("bilibili")) { biliLoop(); biliStatusLoop(); }
   if (CHAT_SOURCES.includes("youtube")) ytLoop();
   if (CHAT_SOURCES.includes("ingest")) console.log("[live] 弹幕上报(ingest)已启用:POST /__lb/ingest");
   if (!CHAT_SOURCES.includes("bilibili") && !CHAT_SOURCES.includes("youtube") && !CHAT_SOURCES.includes("ingest")) console.log("[live] 未配置弹幕源(YT_API_KEY/YT_VIDEO_ID 或 BILI_ROOM_ID;也可用 ingest 上报)");
