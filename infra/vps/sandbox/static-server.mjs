@@ -561,7 +561,7 @@ const AUTO_CREATE_MS = Number(process.env.PLAYGROUND_AUTO_CREATE_INTERVAL_SEC ||
 const AUTO_CREATE_MAX = Number(process.env.PLAYGROUND_AUTO_CREATE_MAX || 0); // 0 = 不限
 const AUTO_FOCUS_MIN = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MIN || 3)); // 聚焦最少停留轮数
 const AUTO_FOCUS_MAX = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MAX || 6)); // 聚焦软上限(到点建议换)
-const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "平民化、便民的小工具(纯前端、手机也能用):图片压缩·格式转换·加水印、二维码生成、单位/汇率/房贷/个税/AA分账计算器、日期倒计时与时区、文本工具(字数·去重·JSON格式化·正则测试)、密码生成、随机抽签点名、配色渐变生成、简易记账/待办(本地存储)、简历/请假条/收据生成、大字版老人友好工具";
+const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "生活化便民(吃穿住行玩买/健康/家庭),并接入外部平台:本地生活(附近吃喝玩乐·外卖·团购)、购物比价与优惠(淘宝/京东/拼多多)、出行(高德/百度地图·公交地铁·打车·12306)、天气与空气质量、生活缴费与快递查询、健康与用药提醒、家庭记账/菜谱/纪念日、招聘租房";
 const AUTO_WEB = process.env.PLAYGROUND_AUTO_WEB !== "0"; // 允许在任务里提示 agent 先联网找灵感
 const YT_API_KEY = process.env.YT_API_KEY || "";
 const YT_VIDEO_ID = (process.env.YT_VIDEO_ID || "").trim();
@@ -1842,7 +1842,11 @@ async function proposePlan() {
       "【动作二选一】improve=挑一个现有页面做**有创意**的升级(优先新玩法/交互/可视化,少做纯样式微调);create=**从零做一个全新的东西**(新页面/新玩法/新工具),并在首页加入口。\n" +
       "【创作取向】优先:" + AUTO_STYLE + "。\n" +
       "【拒绝奶头乐,重要】**不要**做「点击得分/接住/躲避/跑酷/打怪/连连看」这类纯消遣小游戏,也不要只堆粒子特效刷屏。\n" +
-      "【便民优先,重要】优先做**平民化、便民**的实用小工具(见上方创作取向):输入→输出/下载,**打开就能用、手机也能用**;要有**默认示例**让人一眼看懂(直播时自动用示例演示一遍)。宁可做一个小而实用的工具,也不要再做花哨的演示。\n" +
+      "【生活化·接入外部平台,重要】主题要**贴近日常生活**(吃穿住行玩买/健康/家庭/本地生活),**不要**做成程序员工具。要**接入外部平台内容**:\n" +
+      "  ① 能用**深链跳转**就用:淘宝 `https://s.taobao.com/search?q=关键词`、京东 `https://search.jd.com/Search?keyword=关键词`、美团 `https://www.meituan.com/s/关键词`、大众点评 `https://www.dianping.com/search/keyword/1/0_关键词`、高德 `https://uri.amap.com/search?keyword=关键词`、百度 `https://www.baidu.com/s?wd=关键词`、12306 等;\n" +
+      "  ② 能取数据的用**免 key 公开 API**:天气/空气质量(open-meteo)、汇率、万年历/节假日等;\n" +
+      "  ③ **不要**在页面里直接 fetch 其它站点(会被 CORS 挡),也**不要**做违规抓取/iframe 嵌入。\n" +
+      "  **手机优先、大字、打开就能用**,带默认示例(直播时自动演示一遍)。\n" +
       "【首页结构,重要】首页 index.html 是**「便民工具箱」**:按类别分组(图片/计算/文本/时间/生活)展示**便民小工具**的大卡片;小游戏/演示类统一收进**二级入口**「🎮 小游戏合集」(arcade.html),首页只放一个小按钮链到它。所有旧页面都保留,不要删除。\n" +
       "【避免重复】不要与『现有页面』里已有的功能、或『最近已做』重复;重复度高的点子直接弃用,换别的。\n" +
       "【避免失败】不要重复『失败过』里的做法;换更简单、更可能一次做成的实现。\n" +
