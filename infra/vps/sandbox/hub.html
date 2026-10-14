@@ -254,10 +254,23 @@
     } catch (e) {}
   }
   var lastSiteSeq = 0;
+  var lastPath = "";
+  function reportPath() {
+    try {
+      var f = document.getElementById("f-site");
+      var p = (f && f.contentWindow && f.contentWindow.location && f.contentWindow.location.pathname) || "";
+      p = String(p).replace(/^\/preview\/?/, "");
+      if (p && p !== lastPath) {
+        lastPath = p;
+        fetch("/__lb/page", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: p }) }).catch(function () {});
+      }
+    } catch (e) {}
+  }
   setInterval(function () {
     fetch("/__lb/state", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (s) {
       if (s && s.site && s.site.seq && s.site.seq !== lastSiteSeq) { lastSiteSeq = s.site.seq; applySite(s.site); }
     }).catch(function () {});
+    reportPath();
   }, 1000);
 })();
 </script>

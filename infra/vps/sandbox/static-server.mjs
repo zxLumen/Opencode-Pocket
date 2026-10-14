@@ -527,6 +527,7 @@ const LIVE_ENABLED = process.env.PLAYGROUND_LIVE !== "0";
 const MIN_VOTES = Number(process.env.PLAYGROUND_MIN_VOTES || 0); // 默认 0 = 不设票数门槛
 const COOLDOWN_MS = Number(process.env.PLAYGROUND_COOLDOWN_SEC || 0) * 1000; // 默认 0 = 无冷却
 const MAX_ROUNDS = Number(process.env.PLAYGROUND_MAX_ROUNDS || 0); // 0 = 不限
+const MAX_RUN_MS = Number(process.env.PLAYGROUND_MAX_RUN_SEC || 300) * 1000; // 单轮最长运行时间(0=不限);超时自动中断接下一棒,避免自调参循环卡住直播
 // 弹幕审核:规则 + AI 意图/风控;只有「给沙盒的明确指令」才进投票
 const MODERATE = process.env.PLAYGROUND_MODERATE === "1"; // 默认关闭:弹幕侧不过滤,交给模型判断
 const MODERATE_MODE = String(process.env.PLAYGROUND_MODERATE_MODE || "both").toLowerCase(); // both|rules|llm|off
@@ -1586,6 +1587,7 @@ async function proposePlan() {
       "【连贯性,重要】" + focusLine + "\n" +
       "【观众视角,重要】观众只能看到预览的**一屏**,且不会自己操作。若你要做的事**不在『当前展示』那一页**,你必须用 before 的页面操作**把观众带过去**——像真观众一样:当前页上有通往目标的**入口/链接**就优先用 `click`(文字用页面上真实的入口文字),没有入口再用 `goto`。**要展示某页就必须导航过去(click/goto);不要用 reload/scroll 代替**。\n" +
       "【观众不能操作网页,重要】观众只能看直播画面,**无法点击/拖动网页**。别做「必须观众动手才有反应」的东西;优先做**不用操作也能看**的(自动演示/自动走位/循环动画/可视化/AI自动对局/实时榜单/弹幕飘屏),或把交互接到**弹幕/投票**上(页面可读 `__audience.json` 与 `../__lb/state`)。\n" +
+      "【首页要好看,重要】首页 index.html 是观众第一眼:要**简洁的卡片/缩略图网格**(每个入口一个图标+短标题≤10字),**不要**堆大段文字说明;新建页面必须在首页加一张卡片入口。若发现首页现在是一堆文字/很乱,优先 `improve index.html` 把它改成卡片网格。\n" +
       "【页面操作(before/after,可选)】只支持这些**精确形状**:{\"type\":\"goto\",\"path\":\"页面文件名\"} 或 {\"type\":\"scroll\",\"dir\":\"up|down|top|bottom\"} 或 {\"type\":\"click\",\"text\":\"要点文字\"} 或 {\"type\":\"reload\"} 或 {\"type\":\"back\"};不需要就省略该字段。\n" +
       "只输出 JSON:{\"action\":\"improve|create\",\"page\":\"现有页面文件名(improve 时)\",\"title\":\"新东西名字(create 时)\",\"task\":\"一句话,具体可执行\",\"before\":{...},\"after\":{...}}。不要解释。";
     const r = await fetch(GATEWAY_URL + "/chat/completions", {
@@ -1629,6 +1631,17 @@ async function proposePlan() {
         if (!nav(after)) after = { type: "goto", path: page };
       }
     }
+    // click 兜底:入口文字在"当前展示页"里不存在(漏加/文字不符)→ 直接 goto 目标页,别让观众卡在首页
+    const fixNav = async (op) => {
+      if (!op || op.type !== "click" || !page) return op;
+      const core = String(op.text || "").replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}\s]/gu, "");
+      let ok = false;
+      try { const h = await readFile(join(WORKSPACE, live.page || "index.html"), "utf8"); ok = Boolean(core) && (h.indexOf(String(op.text)) >= 0 || h.indexOf(core) >= 0); } catch {}
+      if (!ok) { console.log("[live] 入口文字不在当前页,改用 goto:", op.text); return { type: "goto", path: page }; }
+      return op;
+    };
+    before = await fixNav(before);
+    after = await fixNav(after);
     return { action: action, page: page, title: title, task: task, before: before, after: after };
   } catch { return null; }
 }
@@ -2091,6 +2104,11 @@ async function stallLoop() {
       if (!injectSince) injectSince = Date.now();
       else if (Date.now() - injectSince > 90000) { console.warn("[live] 注入疑似卡死 → 复位 injecting"); live.injecting = false; injectSince = 0; }
     } else injectSince = 0;
+    // 单轮超时:一个自调参/长循环任务把直播卡住 → 中断并接下一棒
+    if (MAX_RUN_MS > 0 && live.session === "running" && !live.injecting && live.lastInjectAt && Date.now() - live.lastInjectAt > MAX_RUN_MS) {
+      console.warn("[live] 单轮超时", Math.round((Date.now() - live.lastInjectAt) / 1000), "s → 中断并接下一棒");
+      await forceRelay("单轮超时");
+    }
   }
 }
 
@@ -2190,6 +2208,18 @@ const server = createServer(async (req, res) => {
   // 直播投票:榜单页 + 状态(SSE) + 管理(POST,需 token);读写都在只读校验之前
   if (pathname === "/__board") return serveBoard(req, res);
   if (pathname === "/__lb/state") return json(res, publicState());
+  // 工作台回报预览 iframe 的真实路径 → 让 live.page 准确(click 导航后也能跟上)
+  if (pathname === "/__lb/page") {
+    if (req.method !== "POST") return send(res, 405, "method not allowed");
+    let body = {};
+    try { body = JSON.parse((await readBody(req)) || "{}"); } catch {}
+    let p = String((body && body.path) || "").replace(/^\/+/, "").trim();
+    if (!p) p = "index.html";
+    if (!p.includes("..") && /^[a-zA-Z0-9._\-\/]+$/.test(p)) {
+      if (p !== live.page) { live.page = p; changed(); }
+    }
+    return json(res, { ok: true, page: live.page });
+  }
   if (pathname === "/__lb/events") return serveLiveEvents(req, res);
   if (pathname === "/__lb/admin") {
     if (req.method !== "POST") return send(res, 405, "method not allowed");
