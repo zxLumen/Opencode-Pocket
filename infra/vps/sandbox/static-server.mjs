@@ -952,7 +952,7 @@ async function ytResolveChatId() {
 }
 let ytToken = null, ytPrimed = false;
 async function ytPollOnce() {
-  const u = new URL("https://www.googleapis.com/youtube/v3/liveChatMessages");
+  const u = new URL("https://www.googleapis.com/youtube/v3/liveChat/messages");
   u.searchParams.set("liveChatId", live.chat.chatId);
   u.searchParams.set("part", "snippet,authorDetails");
   u.searchParams.set("maxResults", "200");
