@@ -602,25 +602,46 @@ const AUTO_FOCUS_MAX = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MAX 
 const VIEW_PAUSE_MS = Number(process.env.PLAYGROUND_VIEW_PAUSE_SEC || 25) * 1000;
 // 平台合规:未取得资质,直播里不得讲解金融投资类内容(实测观众提"A股数据库"→ 平台"违规提醒",多次将断播)。
 // 策略:**页面保留**(观众可自行从预览站访问),但**直播预览绝不切进去**(禁止 goto 到金融类页面)。
-const FINANCE_RE = /(股票|炒股|股民|A股|港股|美股|大盘|个股|行情|涨跌|涨停|跌停|K线|均线|证券|券商|开户|基金|债券|期货|期权|外汇|汇市|虚拟货币|加密货币|数字货币|比特币|以太坊|挖矿|理财|投资|投顾|资管|私募|保险|保费|贷款|网贷|信贷|信用卡|财报|市盈率|市净率|资金流|龙虎榜|博彩|彩票|赌博|下注)/;
-const noShowCache = new Map(); // 页面 -> 是否"直播不可展示"(金融投资类)
-const NO_SHOW_NAME_RE = /(ashare|stock|fund|finance|invest|kline|quote|gupiao|zhengquan|licai|baoxian|daikuan)/i;
-async function isNoShowPage(page) {
+const PAGE_POLICY_SYS = "你是直播内容合规审核。判断这个网页**是否属于平台禁止在直播中展示的类别**:"
+  + "① 金融投资类(股票/炒股/A股/港股/美股/行情/K线/基金/债券/期货/期权/外汇/虚拟货币/加密货币/理财/投资/投顾/保险/贷款/信贷/信用卡/博彩/彩票/赌博等);"
+  + "② 医疗诊断或用药建议;③ 法律意见;④ 政治敏感;⑤ 违法违规。"
+  + "只输出 JSON:{\"noShow\":true|false,\"category\":\"金融投资|医疗|法律|政治|违法|无\",\"why\":\"≤16字\"}。不要解释。";
+// 页面是否"直播不可展示" —— **交大模型判断并记录**(不用正则);页面没变就直接用记录
+async function judgePage(page) {
   if (!page) return false;
-  const hit = noShowCache.get(page);
-  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.v; // 10 分钟缓存(页面可能被改)
-  let v = NO_SHOW_NAME_RE.test(String(page)) || FINANCE_RE.test(String(page));
-  if (!v) {
-    try {
-      const h = await readFile(join(WORKSPACE, page), "utf8");
-      // 关键:去掉所有空白再匹配(标题常写成"A 股"这种带空格的)
-      const txt = (((h.match(/<title>([^<]*)<\/title>/i) || [])[1] || "") + h.slice(0, 12000)).replace(/\s+/g, "");
-      v = FINANCE_RE.test(txt);
-    } catch {}
-  }
-  if (noShowCache.size > 300) noShowCache.clear();
-  noShowCache.set(page, { v: v, at: Date.now() });
-  return v;
+  let st = null;
+  try { st = await stat(join(WORKSPACE, page)); } catch { return false; }
+  const rec = (live.pagePolicy || {})[page];
+  if (rec && rec.mtimeMs >= st.mtimeMs) return Boolean(rec.noShow); // 页面没变 → 用记录
+  let title = "", text = "";
+  try {
+    const h = await readFile(join(WORKSPACE, page), "utf8");
+    title = ((h.match(/<title>([^<]*)<\/title>/i) || [])[1] || "").trim();
+    text = h.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 1500);
+  } catch { return false; }
+  if (!GATEWAY_TOKEN) return false;
+  try {
+    const r = await fetch(GATEWAY_URL + "/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
+      body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0, messages: [
+        { role: "system", content: PAGE_POLICY_SYS },
+        { role: "user", content: JSON.stringify({ 文件: page, 标题: title, 正文摘要: text }) }] }),
+    });
+    if (!r.ok) return false;
+    const d = await r.json();
+    const c = String((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "");
+    const m = c.match(/\{[\s\S]*\}/);
+    if (!m) return false;
+    let o; try { o = JSON.parse(m[0]); } catch { return false; }
+    const noShow = o && o.noShow === true;
+    live.pagePolicy = live.pagePolicy || {};
+    live.pagePolicy[page] = { noShow: noShow, category: String(o.category || ""), why: String(o.why || ""), at: Date.now(), mtimeMs: st.mtimeMs };
+    console.log("[live] 页面合规判定(模型):", page, noShow ? "❌不展示(" + (o.category || "") + ")" : "✅可展示", o.why || "");
+    changed();
+    return noShow;
+  } catch { return false; }
 }
 const FOLLOWUP_MAX = Math.max(1, Number(process.env.PLAYGROUND_FOLLOWUP_ROUNDS || 6)); // 观众提了方向后,自动开发"沿着它辅助"的轮数 // 每轮跑完留给观众"看结果"的停顿(期间不接新任务)
 const AUTO_PROJECT = (process.env.PLAYGROUND_AUTO_PROJECT || "").trim(); // 常驻大项目:自动创作长期服务于它
@@ -696,6 +717,7 @@ let live = {
   lastViewOp: null, // 最近一次"观众视角校验"补的操作 {key,at}(去重,避免反复补同一个)
   holdUntil: 0, // 暂停接棒到该时刻(每轮跑完给观众看结果)
   followUp: null, // 观众刚提的方向 {text,page,at,rounds}:后续自动开发沿着它、以辅助为主
+  pagePolicy: {}, // 页面合规判定记录 {page:{noShow,category,why,at,mtimeMs}}(大模型判定,持久化)
   siteFirstAt: null,
   focus: null, // 自动创作聚焦 { action, page, title, rounds }
   guide: null, // { examples:[...], at }
@@ -715,6 +737,7 @@ async function loadLive() {
       live.lastInjectAt = Number(d.lastInjectAt) || 0;
       live.focus = d.focus && typeof d.focus === "object" ? d.focus : null;
       if (typeof d.page === "string") live.page = d.page;
+      live.pagePolicy = (d.pagePolicy && typeof d.pagePolicy === "object") ? d.pagePolicy : {};
       live.currentRun = [...live.executed].reverse().find((e) => e && e.status === "running") || null;
       live.audience = (d.audience && typeof d.audience === "object") ? d.audience : {};
     }
@@ -730,7 +753,7 @@ function saveLive() {
       const tmp = STATE_FILE + ".tmp";
       const data = {
         round: live.round, autoDirect: live.autoDirect, options: live.options,
-        executed: live.executed.slice(-200), lastSentText: live.lastSentText, lastInjectAt: live.lastInjectAt, focus: live.focus, page: live.page,
+        executed: live.executed.slice(-200), lastSentText: live.lastSentText, lastInjectAt: live.lastInjectAt, focus: live.focus, page: live.page, pagePolicy: live.pagePolicy,
         audience: live.audience || {},
       };
       await writeFile(tmp, JSON.stringify(data));
@@ -1591,7 +1614,7 @@ async function siteTick() {
   let cmd = {};
   try { cmd = JSON.parse(top.cmd || "{}"); } catch {}
   // 平台合规:金融投资类页面不在直播里展示(观众自己从预览站访问不受影响)
-  if (cmd.type === "goto" && cmd.path && await isNoShowPage(cmd.path)) {
+  if (cmd.type === "goto" && cmd.path && await judgePage(cmd.path)) {
     console.warn("[live] 跳过切到金融投资类页面(平台合规):", cmd.path);
     recordExecuted({ round: live.round, text: top.text + " (跳过:金融类页面不在直播展示)", votes: top.votes, src: top.src || "?", at: Date.now(), status: "failed" });
     live.options = live.options.filter((o) => o !== top);
@@ -2209,7 +2232,7 @@ async function showLatestPage(taskText) {
       if (best && Date.now() - bt < 10 * 60 * 1000) page = best;
     }
     if (!page) return;
-    if (await isNoShowPage(page)) { console.log("[live] 不展示金融投资类页面(平台合规):", page); return; }
+    if (await judgePage(page)) { console.log("[live] 不展示金融投资类页面(平台合规):", page); return; }
     // 位置:任务里提到"底部/末尾"或"顶部/开头" → 附加滚动
     let scroll = null;
     if (/(底部|最下面|最底|末尾|页脚|bottom)/i.test(t)) scroll = "bottom";
@@ -2542,7 +2565,7 @@ async function stallLoop() {
       else if (Date.now() - injectSince > 90000) { console.warn("[live] 注入疑似卡死 → 复位 injecting"); live.injecting = false; injectSince = 0; }
     } else injectSince = 0;
     // 平台合规:当前展示页若是金融投资类 → 立刻切走(直播不展示;观众自行访问不受影响)
-    if (!live.injecting && live.page && await isNoShowPage(live.page)) {
+    if (!live.injecting && live.page && await judgePage(live.page)) {
       console.log("[live] 当前展示页是金融投资类,切走 →", live.page);
       enqueueSiteAuto({ type: "goto", path: "index.html" });
       await sleep(6000);
@@ -2635,6 +2658,10 @@ async function handleAdmin(req, res) {
   else if (action === "add") handleChat(String(body.text || ""), String(body.channel || "admin"), String(body.name || ""));
   else if (action === "send") { const t = topOption(); if (t) await injectTop(t); }
   else if (action === "force") await forceRelay("admin 手动"); // 强制接棒(清僵尸 run)
+  else if (action === "policy") { // 查看/清除页面合规判定记录(大模型判定结果)
+    if (body.clear) { live.pagePolicy = {}; console.log("[live] admin 清空页面合规记录"); }
+    return json(res, { ok: true, pagePolicy: live.pagePolicy || {} });
+  }
   else if (action === "followup") { // 手动指定"观众方向"(后续自动开发沿着它、以辅助为主);text 为空则清除
     const t = String(body.text || "").trim();
     live.followUp = t ? { text: t.slice(0, 120), page: String(body.page || "").replace(/^\/+/, ""), at: Date.now(), rounds: 0 } : null;
