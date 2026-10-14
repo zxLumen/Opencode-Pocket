@@ -602,6 +602,19 @@ const AUTO_FOCUS_MAX = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MAX 
 const VIEW_PAUSE_MS = Number(process.env.PLAYGROUND_VIEW_PAUSE_SEC || 25) * 1000;
 // 平台合规:未取得资质,直播里不得讲解金融投资类内容(实测观众提"A股数据库"→ 平台"违规提醒",多次将断播)。
 // 策略:**页面保留**(观众可自行从预览站访问),但**直播预览绝不切进去**(禁止 goto 到金融类页面)。
+// 找一个"可展示"的安全页:①已有 noShow:false 记录且页面没变的 ②否则逐个判(最多 3 个,控制模型调用)
+async function pickSafePage() {
+  try {
+    const files = (await readdir(WORKSPACE)).filter((f) => f.endsWith(".html"));
+    for (const f of files) {
+      const r = (live.pagePolicy || {})[f];
+      if (r && !r.noShow) { try { const st = await stat(join(WORKSPACE, f)); if (r.mtimeMs >= st.mtimeMs) return f; } catch {} }
+    }
+    let n = 0;
+    for (const f of files) { if (n >= 3) break; const bad = await judgePage(f); n++; if (!bad) return f; }
+  } catch {}
+  return "";
+}
 const PAGE_POLICY_SYS = "你是直播内容合规审核。判断这个网页**是否属于平台禁止在直播中展示的类别**:"
   + "① 金融投资类(股票/炒股/A股/港股/美股/行情/K线/基金/债券/期货/期权/外汇/虚拟货币/加密货币/理财/投资/投顾/保险/贷款/信贷/信用卡/博彩/彩票/赌博等);"
   + "② 医疗诊断或用药建议;③ 法律意见;④ 政治敏感;⑤ 违法违规。"
@@ -2233,7 +2246,7 @@ async function showLatestPage(taskText) {
       if (best && Date.now() - bt < 10 * 60 * 1000) page = best;
     }
     if (!page) return;
-    if (await judgePage(page)) { console.log("[live] 不展示金融投资类页面(平台合规):", page); return; }
+    if (await judgePage(page)) { const safe = await pickSafePage(); console.log("[live] 目标页不可展示,改去安全页:", page, "→", safe || "(没找到)"); if (safe && safe !== live.page) enqueueSiteAuto({ type: "goto", path: safe }); return; }
     // 位置:任务里提到"底部/末尾"或"顶部/开头" → 附加滚动
     let scroll = null;
     if (/(底部|最下面|最底|末尾|页脚|bottom)/i.test(t)) scroll = "bottom";
@@ -2567,9 +2580,9 @@ async function stallLoop() {
     } else injectSince = 0;
     // 平台合规:当前展示页若是金融投资类 → 立刻切走(直播不展示;观众自行访问不受影响)
     if (!live.injecting && live.page && await judgePage(live.page)) {
-      console.log("[live] 当前展示页是金融投资类,切走 →", live.page);
-      enqueueSiteAuto({ type: "goto", path: "index.html" });
-      await sleep(6000);
+      const safe = await pickSafePage();
+      console.log("[live] 当前展示页不可展示,切到安全页 →", safe || "(没找到)");
+      if (safe) { enqueueSiteAuto({ type: "goto", path: safe }); await sleep(6000); }
     }
     // 单轮超时:一个自调参/长循环任务把直播卡住 → 中断并接下一棒
     if (MAX_RUN_MS > 0 && live.session === "running" && !live.injecting && live.lastInjectAt && Date.now() - live.lastInjectAt > MAX_RUN_MS) {
