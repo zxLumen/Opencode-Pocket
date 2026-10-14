@@ -657,6 +657,7 @@ async function judgePage(page) {
     return noShow;
   } catch { return false; }
 }
+const AUTO_MAX_PER_HOUR = Math.max(0, Number(process.env.PLAYGROUND_AUTO_MAX_PER_HOUR || 4)); // 自动创作限流:每小时最多几轮(0=不限)
 const FOLLOWUP_MAX = Math.max(1, Number(process.env.PLAYGROUND_FOLLOWUP_ROUNDS || 6)); // 观众提了方向后,自动开发"沿着它辅助"的轮数 // 每轮跑完留给观众"看结果"的停顿(期间不接新任务)
 const AUTO_PROJECT = (process.env.PLAYGROUND_AUTO_PROJECT || "").trim(); // 常驻大项目:自动创作长期服务于它
 const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "生活化便民(吃穿住行玩买/健康/家庭),并接入外部平台:本地生活(附近吃喝玩乐·外卖·团购)、购物比价与优惠(淘宝/京东/拼多多)、出行(高德/百度地图·公交地铁·打车·12306)、天气与空气质量、生活缴费与快递查询、健康与用药提醒、家庭记账/菜谱/纪念日、招聘租房";
@@ -731,6 +732,7 @@ let live = {
   lastViewOp: null, // 最近一次"观众视角校验"补的操作 {key,at}(去重,避免反复补同一个)
   holdUntil: 0, // 暂停接棒到该时刻(每轮跑完给观众看结果)
   followUp: null, // 观众刚提的方向 {text,page,at,rounds}:后续自动开发沿着它、以辅助为主
+  autoTimes: [], // 最近自动创作注入时间(限流用)
   pagePolicy: {}, // 页面合规判定记录 {page:{noShow,category,why,at,mtimeMs}}(大模型判定,持久化)
   siteFirstAt: null,
   focus: null, // 自动创作聚焦 { action, page, title, rounds }
@@ -752,6 +754,7 @@ async function loadLive() {
       live.focus = d.focus && typeof d.focus === "object" ? d.focus : null;
       if (typeof d.page === "string") live.page = d.page;
       live.pagePolicy = (d.pagePolicy && typeof d.pagePolicy === "object") ? d.pagePolicy : {};
+      live.autoTimes = Array.isArray(d.autoTimes) ? d.autoTimes.filter((t) => Date.now() - t < 3600 * 1000) : [];
       live.currentRun = [...live.executed].reverse().find((e) => e && e.status === "running") || null;
       live.audience = (d.audience && typeof d.audience === "object") ? d.audience : {};
     }
@@ -767,7 +770,7 @@ function saveLive() {
       const tmp = STATE_FILE + ".tmp";
       const data = {
         round: live.round, autoDirect: live.autoDirect, options: live.options,
-        executed: live.executed.slice(-200), lastSentText: live.lastSentText, lastInjectAt: live.lastInjectAt, focus: live.focus, page: live.page, pagePolicy: live.pagePolicy,
+        executed: live.executed.slice(-200), lastSentText: live.lastSentText, lastInjectAt: live.lastInjectAt, focus: live.focus, page: live.page, pagePolicy: live.pagePolicy, autoTimes: live.autoTimes,
         audience: live.audience || {},
       };
       await writeFile(tmp, JSON.stringify(data));
@@ -2123,6 +2126,12 @@ async function autoCreateLoop() {
     if (live.session !== "idle") continue;
     if (live.injecting) continue;
     if (live.options.some((o) => o.kind !== "auto")) continue; // 有观众票 → 让位,不抢
+    // 限流:自动创作每小时最多 AUTO_MAX_PER_HOUR 轮(省 token)
+    live.autoTimes = (live.autoTimes || []).filter((t) => Date.now() - t < 3600 * 1000);
+    if (AUTO_MAX_PER_HOUR > 0 && live.autoTimes.length >= AUTO_MAX_PER_HOUR) {
+      if (Date.now() - (live.lastRateLogAt || 0) > 60000) { live.lastRateLogAt = Date.now(); console.log("[live] 自动创作限流:最近 1 小时已", live.autoTimes.length, "轮(上限", AUTO_MAX_PER_HOUR, "),暂不接棒"); }
+      continue;
+    }
     const opt = live.options.find((o) => o.kind === "auto");
     if (!opt) continue;
     if (opt.text === live.lastSentText) continue;
@@ -2137,6 +2146,7 @@ async function autoCreateLoop() {
     const ok = await injectTop(opt, "auto");
     if (!ok) continue;
     autoCount++;
+    live.autoTimes.push(Date.now()); // 记一次自动创作(限流)
     // 3) 等这轮跑完
     await waitIdle(180000);
     // 4) after:切过去让观众看到效果 —— 同样并入票池(观众可见/可投票)
