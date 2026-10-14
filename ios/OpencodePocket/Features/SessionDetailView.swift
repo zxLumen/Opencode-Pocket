@@ -28,6 +28,12 @@ private struct BottomYKey: PreferenceKey {
 }
 private enum PullPhase: Equatable { case idle, armed, refreshing, done }
 
+/// 行位置盒子：刻意**不**做成 @State，写它不会触发重渲染，
+/// 从而避免「偏好 → state → 重渲染 → 新偏好」的每帧回环。
+private final class FrameBox {
+    var frames: [String: CGRect] = [:]
+}
+
 private func dismissKeyboard() {
     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
 }
@@ -63,22 +69,21 @@ struct SessionDetailView: View {
     @State private var loadingOlder = false
     @State private var didInitialScroll = false
     @State private var showModels = false
-    @State private var rowFrames: [String: CGRect] = [:]
+    @State private var frames = FrameBox()
     @State private var pullPhase: PullPhase = .idle
     @State private var bottomMinY: CGFloat = .greatestFiniteMagnitude
     @State private var refreshCount = 0
     @State private var lastRefreshAt: Date?
-    @State private var topMinY: CGFloat = 0
-    @State private var contentHeight: CGFloat = 0
     @State private var viewportHeight: CGFloat = 0
 
-    private let pageSize = 25
+    private let pageSize = 50       // 首次加载（最近 50 条）
+    private let olderBatch = 25     // 上拉到顶时每批再取
+    private let windowMax = 150     // 内存 / 渲染窗口上限
 
+    /// 用底部哨兵判定「是否贴底」：LazyVStack 下 contentHeight 不可靠。
     private var atBottom: Bool {
-        guard viewportHeight > 0, contentHeight > 0 else { return true }
-        let maxScroll = max(contentHeight - viewportHeight, 0)
-        let scrolled = max(-topMinY, 0)
-        return maxScroll - scrolled <= 150
+        guard viewportHeight > 0, bottomMinY < .greatestFiniteMagnitude else { return true }
+        return bottomMinY <= viewportHeight + 80
     }
 
     private var session: Session? { store.session(sessionID) }
@@ -99,10 +104,10 @@ struct SessionDetailView: View {
                     .background(GeometryReader { g in
                         Color.clear.preference(key: ViewHKey.self, value: g.size.height)
                     })
-                    .onPreferenceChange(TopYKey.self) { topMinY = $0 }
-                    .onPreferenceChange(ContentHKey.self) { contentHeight = $0 }
-                    .onPreferenceChange(ViewHKey.self) { viewportHeight = $0 }
-                    .onPreferenceChange(RowFrameKey.self) { rowFrames = $0 }
+                    .onPreferenceChange(ViewHKey.self) { v in
+                        if abs(v - viewportHeight) > 0.5 { viewportHeight = v }
+                    }
+                    .onPreferenceChange(RowFrameKey.self) { frames.frames = $0 }   // 写进不发布的盒子，避免「重渲染回环」
                     .onPreferenceChange(BottomYKey.self) { v in
                         bottomMinY = v
                         pullEvaluate()
@@ -162,7 +167,7 @@ struct SessionDetailView: View {
 
     @ViewBuilder
     private func timeline(_ proxy: ScrollViewProxy) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        LazyVStack(alignment: .leading, spacing: 14) {
             topSentinel
             if loadingOlder { loadingRow }
             header
@@ -267,6 +272,7 @@ struct SessionDetailView: View {
     private var messageList: some View {
         ForEach(visibleMessages) { message in
             MessageRow(message: message)
+                .equatable()
                 .id(message.id)
                 .background(GeometryReader { g in
                     Color.clear.preference(key: RowFrameKey.self, value: [message.id: g.frame(in: .named("scroll"))])
@@ -351,7 +357,7 @@ struct SessionDetailView: View {
     /// 视口内"最靠底部"的那条消息（= 输入框正上方那一行）的 id。
     private func bottomAnchorID() -> String? {
         let vh = viewportHeight > 0 ? viewportHeight : .greatestFiniteMagnitude
-        let visible = rowFrames.filter { $0.value.maxY > 0 && $0.value.minY < vh }
+        let visible = frames.frames.filter { $0.value.maxY > 0 && $0.value.minY < vh }
         return visible.max { $0.value.minY < $1.value.minY }?.key
     }
 
@@ -379,15 +385,26 @@ struct SessionDetailView: View {
     private func reload() async {
         let page = await store.loadMessages(sessionID: sessionID, limit: pageSize)
         messages = page.items.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
+        if messages.count > windowMax { messages = Array(messages.suffix(windowMax)) }
         olderCursor = page.previous
         persist()
     }
 
+    /// 拉最新一页。
+    /// - 贴底时：并入新消息，并从**最老端**裁到窗口上限（正常"看最新"场景）。
+    /// - 不在底部时：只**更新已有消息**（流式内容等），不并入新消息，
+    ///   也不裁老消息——否则你上翻看历史时窗口会被顶得来回抖动、跳位。
     private func refreshNewest() async {
         let page = await store.loadMessages(sessionID: sessionID, limit: pageSize)
+        let bottom = atBottom
         var byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        for m in page.items { byId[m.id] = m }
-        let merged = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
+        if bottom {
+            for m in page.items { byId[m.id] = m }
+        } else {
+            for m in page.items where byId[m.id] != nil { byId[m.id] = m }
+        }
+        var merged = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
+        if bottom, merged.count > windowMax { merged = Array(merged.suffix(windowMax)) }
         if merged != messages { messages = merged; persist() }
         if olderCursor == nil, let prev = page.previous { olderCursor = prev; persist() }
         if let q = store.queued[sessionID],
@@ -396,14 +413,17 @@ struct SessionDetailView: View {
         }
     }
 
+    /// 上拉到顶：再取一批更早的；超过窗口上限就从**最新端**裁（因为你正在往回看）。
     private func loadOlder(_ proxy: ScrollViewProxy) async {
         guard didInitialScroll, !loadingOlder, let cursor = olderCursor, !cursor.isEmpty else { return }
         loadingOlder = true
         let anchor = messages.first?.id
-        let page = await store.loadMessages(sessionID: sessionID, limit: pageSize, cursor: cursor)
+        let page = await store.loadMessages(sessionID: sessionID, limit: olderBatch, cursor: cursor)
         var byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for m in page.items { byId[m.id] = m }
-        messages = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
+        var merged = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
+        if merged.count > windowMax { merged = Array(merged.prefix(windowMax)) }
+        messages = merged
         olderCursor = page.previous
         persist()
         if let anchor {
@@ -487,8 +507,11 @@ struct LiveBubble: View {
     }
 }
 
-struct MessageRow: View {
+struct MessageRow: View, Equatable {
     let message: Message
+
+    /// 只有消息本身变化时才重建（长列表里能省下大量 diff/渲染）。
+    static func == (a: MessageRow, b: MessageRow) -> Bool { a.message == b.message }
 
     private var roleLabel: String {
         switch message.type {

@@ -110,12 +110,36 @@ private func parseTableRow(_ line: String) -> [String] {
 
 // MARK: - Renderer
 
+/// Markdown 解析缓存：同一段文本只解析一次，
+/// 避免每次视图重渲染都把整段 markdown（含代码块/表格）重新解析一遍。
+@MainActor
+private enum MDCache {
+    private static var blocks: [String: [MDBlock]] = [:]
+    private static var inlines: [String: AttributedString] = [:]
+
+    static func blocks(_ t: String) -> [MDBlock] {
+        if let v = blocks[t] { return v }
+        let v = parseMarkdownBlocks(t)
+        if blocks.count > 300 { blocks.removeAll(keepingCapacity: true) }
+        blocks[t] = v
+        return v
+    }
+
+    static func inline(_ s: String) -> AttributedString {
+        if let v = inlines[s] { return v }
+        let v = MarkdownText.makeInline(s)
+        if inlines.count > 600 { inlines.removeAll(keepingCapacity: true) }
+        inlines[s] = v
+        return v
+    }
+}
+
 struct MarkdownText: View {
     let text: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            ForEach(Array(parseMarkdownBlocks(text).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(MDCache.blocks(text).enumerated()), id: \.offset) { _, block in
                 view(for: block)
             }
         }
@@ -164,8 +188,12 @@ struct MarkdownText: View {
         }
     }
 
-    /// 行内 Markdown（粗/斜/行内码/链接）；对行内码加底色 + 等宽。
+    /// 行内 Markdown（粗/斜/行内码/链接）；对行内码加底色 + 等宽。带缓存。
     static func inline(_ s: String) -> AttributedString {
+        MDCache.inline(s)
+    }
+
+    static func makeInline(_ s: String) -> AttributedString {
         var opts = AttributedString.MarkdownParsingOptions()
         opts.interpretedSyntax = .inlineOnlyPreservingWhitespace
         var attr = (try? AttributedString(markdown: s, options: opts)) ?? AttributedString(s)
