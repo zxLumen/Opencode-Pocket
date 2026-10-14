@@ -995,7 +995,17 @@ async function ytLoop() {
   for (;;) {
     let delay = 5000;
     try { delay = await ytPollOnce(); }
-    catch (e) { live.chat.error = String((e && e.message) || e); live.chat.connected = false; console.error("[live] 拉取弹幕:", live.chat.error); delay = 10000; }
+    catch (e) {
+      live.chat.error = String((e && e.message) || e);
+      live.chat.connected = false;
+      console.error("[live] 拉取弹幕:", live.chat.error);
+      // 直播可能已结束/重开 → 重新解析 liveChatId 并清游标,重开播后能自动恢复(无需重启沙盒)
+      try {
+        const nid = await ytResolveChatId();
+        if (nid !== live.chat.chatId) { live.chat.chatId = nid; ytToken = null; ytPrimed = false; console.log("[live] YouTube 聊天已更新:", nid); }
+      } catch (e2) { /* 直播还没开始,忽略 */ }
+      delay = 15000;
+    }
     broadcastLive();
     await sleep(YT_POLL_MS || Math.min(10000, Math.max(2000, delay)));
   }
