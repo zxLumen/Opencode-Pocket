@@ -2596,6 +2596,11 @@ async function handleAdmin(req, res) {
   else if (action === "add") handleChat(String(body.text || ""), String(body.channel || "admin"), String(body.name || ""));
   else if (action === "send") { const t = topOption(); if (t) await injectTop(t); }
   else if (action === "force") await forceRelay("admin 手动"); // 强制接棒(清僵尸 run)
+  else if (action === "followup") { // 手动指定"观众方向"(后续自动开发沿着它、以辅助为主);text 为空则清除
+    const t = String(body.text || "").trim();
+    live.followUp = t ? { text: t.slice(0, 120), page: String(body.page || "").replace(/^\/+/, ""), at: Date.now(), rounds: 0 } : null;
+    console.log("[live] admin 设置观众方向:", t ? t.slice(0, 60) : "(清除)");
+  }
   else return json(res, { ok: false, error: "unknown action" });
   changed();
   return json(res, { ok: true, state: publicState() });
