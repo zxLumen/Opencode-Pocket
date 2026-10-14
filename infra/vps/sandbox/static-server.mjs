@@ -1158,10 +1158,10 @@ async function ytLoop() {
   let mode = "innertube"; // 先试 innertube(无配额);失败退回 Data API(有配额)
   for (;;) {
     try {
-      let vid = (YT_VIDEO_ID.match(/[?&]v=([\w-]{6,})/) || [])[1] || YT_VIDEO_ID || "";
-      const cur = await ytFindLiveVideoByPage(); // 免费:抓频道 /live 页找"当前正在直播"
-      if (cur) vid = cur;
-      if (!vid) throw new Error("找不到正在直播的视频");
+      // 只用免费的频道页判断"是否在直播" → 不在直播就直接等待,不调 API(省配额)
+      const cur = await ytFindLiveVideoByPage();
+      if (!cur) throw new Error("频道未在直播(等待开播;不消耗配额)");
+      const vid = cur;
       if (mode === "innertube") { live.chat.videoId = vid; await ytInnertubeInit(vid); }
       else { live.chat.chatId = await ytResolveChatId(); }
       break;
