@@ -34,6 +34,7 @@
   .kind { display: inline-block; font-size: 11px; line-height: 1; padding: 2px 6px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
   .kind.executed { color: #93c5fd; border-color: #1d4ed8; }
   .kind.message { color: var(--dim); }
+  .kind.chatter { color: #8aa0b6; border-color: #33475c; }
   .st { font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
   .st.done { color: var(--ok); border-color: #14532d; }
   .st.running { color: #fbbf24; border-color: #78350f; }
@@ -64,6 +65,7 @@
     <select id="f-kind">
       <option value="">全部类型</option>
       <option value="message">只看弹幕</option>
+      <option value="chatter">只看闲聊</option>
       <option value="executed">只看执行</option>
     </select>
     <select id="f-src"><option value="">全部来源</option></select>
@@ -89,13 +91,14 @@
   function srcName(s) { return SRC[s] || s || "?"; }
   function hhmmss(at) { try { return new Date(at).toLocaleString("zh-CN", { hour12: false }); } catch (e) { return "-"; } }
   function stLabel(s) { return { running: "执行中", done: "已完成", failed: "失败", timeout: "已中断" }[s] || s || ""; }
-  function kindLabel(k) { return { message: "弹幕", executed: "执行", "run-end": "结束" }[k] || k || ""; }
+  function kindLabel(r) { if (r.label === "chatter") return "闲聊"; return { message: "弹幕", executed: "执行", "run-end": "结束" }[r.kind] || r.kind || ""; }
   var ALL = [];
 
   function render() {
     var kind = $("f-kind").value, src = $("f-src").value, q = $("f-q").value.trim().toLowerCase();
     var rows = ALL.filter(function (r) {
-      if (kind && r.kind !== kind) return false;
+      if (kind === "chatter") { if (r.label !== "chatter") return false; }
+      else if (kind && r.kind !== kind) return false;
       if (src && r.src !== src) return false;
       if (q) { var hay = ((r.text || "") + " " + (r.name || "") + " " + (r.user || "")).toLowerCase(); if (hay.indexOf(q) < 0) return false; }
       return true;
@@ -107,7 +110,7 @@
     $("rows").innerHTML = rows.slice(0, 2000).map(function (r) {
       return '<tr>' +
         '<td class="t">' + esc(hhmmss(r.at)) + '</td>' +
-        '<td class="n"><span class="kind ' + esc(r.kind) + '">' + esc(kindLabel(r.kind)) + '</span></td>' +
+        '<td class="n"><span class="kind ' + esc(r.label === "chatter" ? "chatter" : r.kind) + '">' + esc(kindLabel(r)) + '</span></td>' +
         '<td class="n"><span class="src">' + esc(srcName(r.src)) + '</span></td>' +
         '<td class="n">' + esc(r.name || r.user || "") + '</td>' +
         '<td class="txt">' + esc(r.text || "") + '</td>' +

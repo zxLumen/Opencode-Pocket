@@ -854,15 +854,74 @@ function ruleFilter(text, norm) {
   for (const w of BLOCKLIST) if (w && text.indexOf(w) >= 0) return false;
   return true;
 }
+// ---------- 弹幕分类:开发想法(进票池/可接棒) vs 闲聊(不进票池,只记录) ----------
+// 原则:**宁可放行,不可误杀**。只有"明确无动作诉求"的才算闲聊;分类失败/拿不准 → 放行。
+const opinionCache = new Map(); // norm -> "actionable"|"chatter"
+const OPINION_SYS = "你是弹幕分类器。判断每条弹幕是否『对 AI 有可执行的动作诉求』(开发想法/功能需求/改动请求/缺陷反馈)。\n" +
+  "规则(**宁可放行,不可误杀**):\n" +
+  "1) 含动作词(加/做/改/实现/优化/支持/换成/弄/搞/建议/希望/能不能/应该/最好/增加/删掉/调整/修/改成/加上/新增/做成/接上/卡住/打不开/报错…)→ actionable\n" +
+  "2) 或含具体功能/对象名词(引导/结算/音效/界面/卡片/存档/排行榜/塔防/迷宫/黑洞/沙漏/弹幕/新手/挂机/关卡/任务/xxx.html…)→ actionable\n" +
+  "3) 只有这些才算 chatter:纯表情/符号、哈哈哈、问候(你好/早/来了)、附和(确实/厉害了/可以的/我去改改/OK)、无动作的感慨或评论、身份/闲聊/求职话题\n" +
+  "4) **拿不准 → actionable**\n" +
+  '只输出 JSON:{"label":"actionable|chatter","why":"≤12字"}。不要解释。';
+async function classifyOpinion(text) {
+  if (!GATEWAY_TOKEN) return null;
+  try {
+    const r = await fetch(GATEWAY_URL + "/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
+      body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0, messages: [
+        { role: "system", content: OPINION_SYS },
+        { role: "user", content: String(text).slice(0, 200) }] }),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const c = String((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "");
+    const m = c.match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    let o; try { o = JSON.parse(m[0]); } catch { return null; }
+    return o && o.label === "chatter" ? "chatter" : "actionable";
+  } catch { return null; }
+}
+async function opinionGate(text, channelId, name) {
+  const norm = normText(text) || text.toLowerCase();
+  let label = opinionCache.get(norm);
+  if (!label) { label = (await classifyOpinion(text)) || "actionable"; if (opinionCache.size > 3000) opinionCache.clear(); opinionCache.set(norm, label); }
+  if (label === "chatter") { // 闲聊:只记录,不进票池(榜单不显示)
+    appendHistory({ kind: "message", label: "chatter", at: Date.now(), src: srcOf(channelId), user: channelId, name: name || "", text: text, votes: 0 });
+    console.log("[live] 闲聊(仅记录,不进票池):", text.slice(0, 36));
+    return false;
+  }
+  addOpinion(text, channelId, name);
+  return true;
+}
+// 一次性清理:把票池里已判为"闲聊"的移除(只记录)
+async function cleanupPoolChatter() {
+  try {
+    const items = live.options.filter((o) => (o.kind || "opinion") !== "site" && o.kind !== "auto");
+    let removed = 0;
+    for (const o of items) {
+      const norm = o.norm || normText(o.text) || o.text;
+      let label = opinionCache.get(norm);
+      if (!label) { label = (await classifyOpinion(o.text)) || "actionable"; opinionCache.set(norm, label); }
+      if (label === "chatter") {
+        appendHistory({ kind: "message", label: "chatter", at: Date.now(), src: o.src || "?", user: "", name: "", text: o.text, votes: o.votes || 0 });
+        live.options = live.options.filter((x) => x !== o);
+        removed++;
+      }
+    }
+    if (removed) { console.log("[live] 票池清理闲聊:", removed, "条(只记录)"); changed(); }
+  } catch {}
+}
 const moderationCache = new Map(); // norm -> { label, at }
 let modQueue = [];
-function enqueueOpinion(text, channelId, name) {
+async function enqueueOpinion(text, channelId, name) {
   text = String(text || "").trim();
   if (!text) return;
   if (text.length > MAX_OPINION_LEN) text = text.slice(0, MAX_OPINION_LEN);
   const norm = normText(text) || text.toLowerCase(); // 纯符号/表情也进池(不丢观众弹幕)
   if (!norm) return;
-  if (!MODERATE || MODERATE_MODE === "off") return addOpinion(text, channelId, name); // 弹幕侧不过滤
+  if (!MODERATE || MODERATE_MODE === "off") return opinionGate(text, channelId, name); // 分类:开发想法进池,闲聊只记录
   if (!ruleFilter(text, norm)) return; // 规则拦截 → 不进投票
   if (MODERATE_MODE === "rules") return addOpinion(text, channelId, name);
   const hit = moderationCache.get(norm);
@@ -2290,6 +2349,7 @@ function startLive() {
   mergeLoop(); moderationLoop(); askLoop(); qvLoop(); siteLoop(); siteIntentLoop(); guideLoop(); audienceLoop(); autoQueueLoop(); autoCreateLoop(); sessionEventLoop(); sessionPollLoop(); stallLoop();
   console.log("[live] 直播投票已启动: 轮次=", live.round, "自动接棒=", live.autoDirect, "最小票数=", MIN_VOTES, "自动合并=", MERGE_ENABLED);
   setTimeout(maybeInject, 5000); // 重启后若已有票且会话空闲,补接一轮
+  setTimeout(cleanupPoolChatter, 20000); // 把票池里已有的"闲聊"清掉(只记录)
 }
 
 // ---------- 榜单页 / 状态端点 / 管理 ----------
