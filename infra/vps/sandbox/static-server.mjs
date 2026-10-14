@@ -565,6 +565,7 @@ const AUTO_STYLE = process.env.PLAYGROUND_AUTO_STYLE || "小游戏 / 可视化 /
 const AUTO_WEB = process.env.PLAYGROUND_AUTO_WEB !== "0"; // 允许在任务里提示 agent 先联网找灵感
 const YT_API_KEY = process.env.YT_API_KEY || "";
 const YT_VIDEO_ID = (process.env.YT_VIDEO_ID || "").trim();
+const YT_CHANNEL_ID = (process.env.YT_CHANNEL_ID || "").trim(); // 有了频道 id 就能自动找到"当前正在直播"的视频(视频 id 每次开播会变)
 const YT_POLL_MS = Number(process.env.YT_POLL_MS || 0);
 // 弹幕源:youtube | bilibili | off(默认按已配置的凭据自动选)
 const BILI_ROOM_ID = String(process.env.BILI_ROOM_ID || "").trim();
@@ -612,7 +613,7 @@ function recordExecuted(entry) {
 }
 const STATE_FILE = join(STATE_DIR, "live.json");
 
-const chatEnabled = CHAT_SOURCES.some((s) => (s === "youtube" && YT_API_KEY && YT_VIDEO_ID) || (s === "bilibili" && BILI_ROOM_ID) || s === "ingest");
+const chatEnabled = CHAT_SOURCES.some((s) => (s === "youtube" && YT_API_KEY && (YT_VIDEO_ID || YT_CHANNEL_ID)) || (s === "bilibili" && BILI_ROOM_ID) || s === "ingest");
 let live = {
   round: 1,
   autoDirect: AUTO_DIRECT_DEFAULT,
@@ -634,7 +635,7 @@ let live = {
   focus: null, // 自动创作聚焦 { action, page, title, rounds }
   guide: null, // { examples:[...], at }
   audience: {}, // channelId -> { name, at, votes }
-  chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, loggedIn: Boolean(BILI_SESSDATA), chatId: null, videoId: YT_VIDEO_ID || null, detail: [CHAT_SOURCES.includes("bilibili") && BILI_ROOM_ID ? "bili:" + BILI_ROOM_ID : "", CHAT_SOURCES.includes("youtube") && YT_VIDEO_ID ? "yt:" + YT_VIDEO_ID : "", CHAT_SOURCES.includes("ingest") ? "ingest" : ""].filter(Boolean).join(" ") || null, lastAt: 0, lastDanmakuAt: 0, liveStatus: null, liveStatusAt: 0, error: null },
+  chat: { source: CHAT_SOURCE, enabled: chatEnabled, connected: false, loggedIn: Boolean(BILI_SESSDATA), chatId: null, videoId: YT_VIDEO_ID || null, detail: [CHAT_SOURCES.includes("bilibili") && BILI_ROOM_ID ? "bili:" + BILI_ROOM_ID : "", CHAT_SOURCES.includes("youtube") && (YT_VIDEO_ID || YT_CHANNEL_ID) ? "yt:" + (YT_VIDEO_ID || YT_CHANNEL_ID) : "", CHAT_SOURCES.includes("ingest") ? "ingest" : ""].filter(Boolean).join(" ") || null, lastAt: 0, lastDanmakuAt: 0, liveStatus: null, liveStatusAt: 0, error: null },
 };
 
 async function loadLive() {
@@ -935,10 +936,8 @@ function rememberSeen(id) {
   seenMessages.add(id);
   if (seenMessages.size > 8000) { const keep = [...seenMessages].slice(-2000); seenMessages.clear(); for (const k of keep) seenMessages.add(k); }
 }
-async function ytResolveChatId() {
-  let vid = YT_VIDEO_ID;
-  const um = vid.match(/[?&]v=([\w-]{6,})/);
-  if (um) vid = um[1];
+async function ytChatIdOf(vid) { // 指定视频的 activeLiveChatId(不在直播中 → null)
+  if (!vid) return null;
   const u = new URL("https://www.googleapis.com/youtube/v3/videos");
   u.searchParams.set("part", "liveStreamingDetails");
   u.searchParams.set("id", vid);
@@ -947,9 +946,50 @@ async function ytResolveChatId() {
   if (!r.ok) throw new Error("videos.list HTTP " + r.status);
   const d = await r.json();
   const item = d.items && d.items[0];
-  const chatId = item && item.liveStreamingDetails && item.liveStreamingDetails.activeLiveChatId;
-  if (!chatId) throw new Error("拿不到 activeLiveChatId(直播可能还没开始)");
-  return chatId;
+  return (item && item.liveStreamingDetails && item.liveStreamingDetails.activeLiveChatId) || null;
+}
+async function ytFindLiveVideoByPage() { // 抓频道 /live 页里的 currentVideoEndpoint(比 search 实时)
+  if (!YT_CHANNEL_ID) return null;
+  const r = await fetch("https://www.youtube.com/channel/" + YT_CHANNEL_ID + "/live", {
+    headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "accept-language": "zh-CN" },
+  });
+  if (!r.ok) return null;
+  const h = await r.text();
+  const i = h.indexOf('"currentVideoEndpoint"');
+  if (i < 0) return null;
+  const m = h.slice(i, i + 400).match(/v=([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+async function ytFindLiveVideoBySearch() { // 兜底:API search(刚开播可能还没索引)
+  if (!YT_CHANNEL_ID) return null;
+  const u = new URL("https://www.googleapis.com/youtube/v3/search");
+  u.searchParams.set("part", "snippet");
+  u.searchParams.set("channelId", YT_CHANNEL_ID);
+  u.searchParams.set("eventType", "live");
+  u.searchParams.set("type", "video");
+  u.searchParams.set("maxResults", "1");
+  u.searchParams.set("key", YT_API_KEY);
+  const r = await fetch(u, { headers: { accept: "application/json" } });
+  if (!r.ok) return null;
+  const d = await r.json();
+  const it = d.items && d.items[0];
+  return it && it.id && it.id.videoId ? it.id.videoId : null;
+}
+async function ytResolveChatId() {
+  let vid = YT_VIDEO_ID;
+  const um = vid.match(/[?&]v=([\w-]{6,})/);
+  if (um) vid = um[1];
+  let cid = vid ? await ytChatIdOf(vid) : null;
+  if (cid) { live.chat.videoId = vid; return cid; }
+  if (vid) console.log("[live] 指定视频不在直播中,改按频道找:", vid);
+  // 视频 id 每次开播都会变 → 按频道自动发现当前直播
+  let auto = await ytFindLiveVideoByPage();
+  if (!auto) auto = await ytFindLiveVideoBySearch();
+  if (auto) {
+    cid = await ytChatIdOf(auto);
+    if (cid) { if (live.chat.videoId !== auto) console.log("[live] 自动发现直播:", auto); live.chat.videoId = auto; return cid; }
+  }
+  throw new Error("拿不到正在直播的视频(指定 videoId 和频道都没找到)");
 }
 let ytToken = null, ytPrimed = false;
 async function ytPollOnce() {

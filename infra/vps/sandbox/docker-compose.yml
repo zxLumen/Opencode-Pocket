@@ -96,6 +96,8 @@ services:
       # YouTube 直播聊天采集(官方 Data API v3;API key 读公开聊天)
       YT_API_KEY: ${YT_API_KEY:-}
       YT_VIDEO_ID: ${YT_VIDEO_ID:-}
+      # 你的 YouTube 频道 id(有了它,video id 每次开播变化时能自动找到当前直播)
+      YT_CHANNEL_ID: ${YT_CHANNEL_ID:-}
       # 弹幕源:youtube | bilibili | off(留空 = 按已配置的凭据自动选)
       CHAT_SOURCE: ${CHAT_SOURCE:-}
       # 外部弹幕上报令牌(POST /__lb/ingest);不填则回退用 PLAYGROUND_ADMIN_TOKEN
