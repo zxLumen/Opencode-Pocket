@@ -800,6 +800,8 @@ function publicState() {
     question: qvPublic(),
     site: live.site || null,
     page: live.page || null,
+    holdUntil: live.holdUntil || 0,
+    autoNextAt: (() => { const t = (live.autoTimes && live.autoTimes.length) ? live.autoTimes[live.autoTimes.length - 1] : 0; return Math.max(live.holdUntil || 0, t ? t + AUTO_MIN_INTERVAL_MS : 0); })(),
     focus: live.focus || null,
     active: live.options.length,
     guide: (!live.options.length && !live.questionVote && live.guide) ? { examples: live.guide.examples } : null,
