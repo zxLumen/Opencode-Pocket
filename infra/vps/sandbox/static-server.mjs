@@ -618,6 +618,7 @@ let live = {
   siteSeq: 0,
   page: "index.html", // 观众当前展示的页面(默认=首页;每次 goto 更新;仅作提示喂给模型,不做任何强制)
   lastViewOp: null, // 最近一次"观众视角校验"补的操作 {key,at}(去重,避免反复补同一个)
+  autoPlan: null, // 票池空时提前 propose 好的下一件事(空闲即用,省掉现调模型的等待)
   siteFirstAt: null,
   focus: null, // 自动创作聚焦 { action, page, title, rounds }
   guide: null, // { examples:[...], at }
@@ -1735,19 +1736,25 @@ async function autoCreateLoop() {
     await sleep(5000);
     if (!LIVE_ENABLED || !live.autoDirect) continue;
     if (live.blocked) continue;
-    if (live.session !== "idle") continue;
-    if (live.options.length) continue; // 有票就不抢,优先观众
-    if (live.injecting) continue;
     if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) continue;
     if (AUTO_CREATE_MAX > 0 && count >= AUTO_CREATE_MAX) continue;
     if (Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue;
-    // 聚焦指向的页面已被删除/还原 → 丢弃聚焦,重新选题(否则会一直改一个不存在的页面)
-    if (live.focus && live.focus.action === "improve" && live.focus.page) {
-      let exists = true;
-      try { await access(join(WORKSPACE, live.focus.page)); } catch { exists = false; }
-      if (!exists) { console.log("[live] 聚焦页面已不存在,丢弃聚焦 →", live.focus.page); live.focus = null; }
+    // 票池空时"提前"把下一件事 propose 好(会话还在跑也没关系)→ 空闲时立刻接棒,不用现等模型
+    if (!live.autoPlan && !live.options.length) {
+      // 聚焦指向的页面已被删除/还原 → 丢弃聚焦,重新选题(否则会一直改一个不存在的页面)
+      if (live.focus && live.focus.action === "improve" && live.focus.page) {
+        let exists = true;
+        try { await access(join(WORKSPACE, live.focus.page)); } catch { exists = false; }
+        if (!exists) { console.log("[live] 聚焦页面已不存在,丢弃聚焦 →", live.focus.page); live.focus = null; }
+      }
+      live.autoPlan = await proposePlan();
+      if (live.autoPlan) console.log("[live] 自动创作提前 propose:", String(live.autoPlan.task || "").slice(0, 60));
     }
-    const plan = await proposePlan();
+    if (live.session !== "idle") continue;
+    if (live.injecting) continue;
+    if (live.options.length) continue; // 有票就不抢,优先观众
+    const plan = live.autoPlan || await proposePlan();
+    live.autoPlan = null;
     if (!plan || !plan.task) continue;
     const taskText = (plan.action === "create" ? "【新建】" : (plan.page ? "【改造 " + plan.page + "】" : "【改造】")) + plan.task + (AUTO_WEB ? "（可先联网检索、参考当下流行玩法/设计再动手）" : "");
     if (taskText === live.lastSentText) continue;
