@@ -634,9 +634,16 @@ async function reviewPage(page, task) {
     const score = Math.max(1, Math.min(5, Number(o.score) || 3));
     const issues = Array.isArray(o.issues) ? o.issues.map((x) => String(x).slice(0, 30)).slice(0, 3) : [];
     live.pageReviews = live.pageReviews || {};
-    live.pageReviews[page] = { score: score, issues: issues, verdict: String(o.verdict || "").slice(0, 30), at: Date.now(), mtimeMs: st.mtimeMs };
-    console.log("[live] 作品评审:", page, "评分", score, "|", String(o.verdict || ""), "| 待改:", issues.join("; "));
-    if (score <= 2 && issues.length) { live.followUp = { text: "按评审意见改进:" + issues.join("; "), page: page, at: Date.now(), rounds: 0 }; console.log("[live] 质量偏低 → 记为待改进方向:", page); }
+    const prevTries = (rec && rec.tries) || 0;
+    live.pageReviews[page] = { score: score, issues: issues, verdict: String(o.verdict || "").slice(0, 30), at: Date.now(), mtimeMs: st.mtimeMs, tries: prevTries };
+    console.log("[live] 作品评审:", page, "评分", score, "/5 |", String(o.verdict || ""), "| 待改:", issues.join("; "));
+    if (score < 5 && issues.length) { // 未满分 → 返工(直到 5 分;最多 REWORK_MAX 次)
+      if (prevTries < REWORK_MAX) {
+        live.pageReviews[page].tries = prevTries + 1;
+        live.followUp = { text: "按评审意见改进(目标满分5分):" + issues.join("; "), page: page, at: Date.now(), rounds: 0 };
+        console.log("[live] 质量未满分(" + score + ") → 返工 " + (prevTries + 1) + "/" + REWORK_MAX + ":", page);
+      } else console.log("[live] 已返工", REWORK_MAX, "次,接受", score, "分:", page);
+    } else if (score >= 5) console.log("[live] 已满分 ✅", page);
     changed();
     return live.pageReviews[page];
   } catch { return null; }
@@ -696,6 +703,7 @@ async function judgePage(page) {
     return noShow;
   } catch { return false; }
 }
+const REWORK_MAX = Math.max(0, Number(process.env.PLAYGROUND_REWORK_MAX || 3)); // 同一页最多返工几次(评审未满分时)
 const AUTO_MAX_PER_HOUR = Math.max(0, Number(process.env.PLAYGROUND_AUTO_MAX_PER_HOUR || 0)); // 自动创作限流:每小时最多几轮(0=不限;默认关)
 const AUTO_MIN_INTERVAL_MS = Number(process.env.PLAYGROUND_AUTO_MIN_INTERVAL_SEC || 1200) * 1000; // 自动创作两轮之间最小间隔(默认 20 分钟)
 const FOLLOWUP_MAX = Math.max(1, Number(process.env.PLAYGROUND_FOLLOWUP_ROUNDS || 6)); // 观众提了方向后,自动开发"沿着它辅助"的轮数 // 每轮跑完留给观众"看结果"的停顿(期间不接新任务)
@@ -720,6 +728,7 @@ const CHAT_SOURCES = CHAT_SOURCE.split(",").map((s) => s.trim()).filter(Boolean)
 const INGEST_TOKEN = String(process.env.PLAYGROUND_INGEST_TOKEN || "").trim() || ADMIN_TOKEN || "";
 const BOARD_FILE = process.env.SANDBOX_BOARD_FILE || "/srv/board.html";
 const HISTORY_HTML = process.env.SANDBOX_HISTORY_FILE || "/srv/history.html";
+const REVIEWS_HTML = process.env.SANDBOX_REVIEWS_FILE || "/srv/reviews.html";
 async function serveHistoryPage(req, res) {
   let html;
   try { html = await readFile(HISTORY_HTML, "utf8"); }
@@ -850,6 +859,9 @@ function publicState() {
     merge: MERGE_ENABLED,
     moderate: MODERATE_MODE,
     chat: { source: live.chat.source, enabled: live.chat.enabled, connected: live.chat.connected, loggedIn: live.chat.loggedIn, lastAt: live.chat.lastAt, lastDanmakuAt: live.chat.lastDanmakuAt, liveStatus: live.chat.liveStatus, liveStatusAt: live.chat.liveStatusAt, error: live.chat.error, detail: live.chat.detail, videoId: live.chat.videoId },
+    reviews: Object.entries(live.pageReviews || {}).map(([pg, r]) => ({ page: pg, score: r.score, verdict: r.verdict || "", issues: r.issues || [], tries: r.tries || 0, at: r.at || 0 })).sort((a, b) => (a.score - b.score) || (b.at - a.at)),
+    rework: live.followUp ? { text: live.followUp.text, page: live.followUp.page || "", rounds: live.followUp.rounds || 0, at: live.followUp.at || 0 } : null,
+    reworkMax: REWORK_MAX,
     options,
     leader,
     executed: live.executed.slice(-40).reverse(),
@@ -2683,6 +2695,13 @@ async function serveBoard(req, res) {
   res.writeHead(200, { ...baseHeaders, "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
   res.end(req.method === "HEAD" ? undefined : html);
 }
+async function serveReviewsPage(req, res) {
+  let html;
+  try { html = await readFile(REVIEWS_HTML, "utf8"); }
+  catch { return send(res, 500, "reviews unavailable", { "Content-Type": "text/plain; charset=utf-8" }); }
+  res.writeHead(200, { ...baseHeaders, "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+  res.end(req.method === "HEAD" ? undefined : html);
+}
 function serveLiveEvents(req, res) {
   res.writeHead(200, {
     ...baseHeaders,
@@ -2777,6 +2796,7 @@ const server = createServer(async (req, res) => {
   // 直播投票:榜单页 + 状态(SSE) + 管理(POST,需 token);读写都在只读校验之前
   if (pathname === "/__board") return serveBoard(req, res);
   if (pathname === "/__history") return serveHistoryPage(req, res);
+  if (pathname === "/__reviews") return serveReviewsPage(req, res);
   if (pathname === "/__lb/state") return json(res, publicState());
   if (pathname === "/__lb/history") return serveHistoryJson(req, res, url);
   // 工作台回报预览 iframe 的真实路径 → 让 live.page 准确(click 导航后也能跟上)

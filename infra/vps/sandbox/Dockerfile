@@ -66,6 +66,7 @@ COPY --chown=10001:10001 static-server.mjs /srv/static-server.mjs
 COPY --chown=10001:10001 hub.html /srv/hub.html
 COPY --chown=10001:10001 board.html /srv/board.html
 COPY --chown=10001:10001 history.html /srv/history.html
+COPY --chown=10001:10001 reviews.html /srv/reviews.html
 # 裁剪版 Web UI(由构建阶段产出;辅助服务从 /srv/app-dist 提供)
 COPY --from=app-build --chown=10001:10001 /build/opencode/packages/app/dist /srv/app-dist
 RUN chmod +x /usr/local/bin/opencode-play-entrypoint

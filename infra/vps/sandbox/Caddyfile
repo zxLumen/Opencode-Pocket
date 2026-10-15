@@ -202,6 +202,12 @@
 			rewrite * /__history
 			import to_helper
 		}
+		# 作品评分后台(实时,不直播;入口只在榜单管理区)
+		@reviewsDoc path /reviews
+		handle @reviewsDoc {
+			rewrite * /__reviews
+			import to_helper
+		}
 		# 其它文档请求一律拉回工作台
 		handle {
 			redir * / 302
