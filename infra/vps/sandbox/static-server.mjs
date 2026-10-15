@@ -602,6 +602,45 @@ const AUTO_FOCUS_MAX = Math.max(1, Number(process.env.PLAYGROUND_AUTO_FOCUS_MAX 
 const VIEW_PAUSE_MS = Number(process.env.PLAYGROUND_VIEW_PAUSE_SEC || 25) * 1000;
 // 平台合规:未取得资质,直播里不得讲解金融投资类内容(实测观众提"A股数据库"→ 平台"违规提醒",多次将断播)。
 // 策略:**页面保留**(观众可自行从预览站访问),但**直播预览绝不切进去**(禁止 goto 到金融类页面)。
+// 作品质量自我评审:每轮产出后**自己评一遍**(专业吗/有用吗/好看吗),分低就记成"待改进方向"下一轮返工
+const QUALITY_SYS = "你是资深产品与前端评审,评估这个『直播里做出来的网页作品』的**专业度与实用性**。\n"
+  + "评分:5=专业·实用·**视觉现代(2025 观感)**·信息密度好;4=不错;3=及格但有明显短板;2=粗糙/不实用/**风格陈旧像几年前**;1=低质/无用。\n"
+  + "只输出 JSON:{\"score\":1-5,\"issues\":[\"最该改的点(≤3条,每条≤20字)\"],\"verdict\":\"≤20字\"}。不要解释。";
+async function reviewPage(page, task) {
+  if (!page || !GATEWAY_TOKEN) return null;
+  let st = null; try { st = await stat(join(WORKSPACE, page)); } catch { return null; }
+  const rec = (live.pageReviews || {})[page];
+  if (rec && rec.mtimeMs >= st.mtimeMs) return rec; // 页面没变 → 用记录
+  let title = "", struct = "", text = "";
+  try {
+    const h = await readFile(join(WORKSPACE, page), "utf8");
+    title = ((h.match(/<title>([^<]*)<\/title>/i) || [])[1] || "").trim();
+    struct = (h.match(/<(h1|h2|h3|button)\b[^>]*>[\s\S]*?<\/\1>/gi) || []).map((x) => x.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()).filter(Boolean).slice(0, 25).join(" | ");
+    text = h.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 1200);
+  } catch { return null; }
+  try {
+    const r = await fetch(GATEWAY_URL + "/chat/completions", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer " + GATEWAY_TOKEN },
+      body: JSON.stringify({ model: GATEWAY_MODEL, temperature: 0.2, messages: [
+        { role: "system", content: QUALITY_SYS },
+        { role: "user", content: JSON.stringify({ 任务: String(task || "").slice(0, 120), 文件: page, 标题: title, 结构: struct, 正文摘要: text }) }] }),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const c = String((d && d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || "");
+    const m = c.match(/\{[\s\S]*\}/); if (!m) return null;
+    let o; try { o = JSON.parse(m[0]); } catch { return null; }
+    const score = Math.max(1, Math.min(5, Number(o.score) || 3));
+    const issues = Array.isArray(o.issues) ? o.issues.map((x) => String(x).slice(0, 30)).slice(0, 3) : [];
+    live.pageReviews = live.pageReviews || {};
+    live.pageReviews[page] = { score: score, issues: issues, verdict: String(o.verdict || "").slice(0, 30), at: Date.now(), mtimeMs: st.mtimeMs };
+    console.log("[live] 作品评审:", page, "评分", score, "|", String(o.verdict || ""), "| 待改:", issues.join("; "));
+    if (score <= 2 && issues.length) { live.followUp = { text: "按评审意见改进:" + issues.join("; "), page: page, at: Date.now(), rounds: 0 }; console.log("[live] 质量偏低 → 记为待改进方向:", page); }
+    changed();
+    return live.pageReviews[page];
+  } catch { return null; }
+}
 // 找一个"可展示"的安全页:①已有 noShow:false 记录且页面没变的 ②否则逐个判(最多 3 个,控制模型调用)
 async function pickSafePage() {
   try {
@@ -734,6 +773,7 @@ let live = {
   holdUntil: 0, // 暂停接棒到该时刻(每轮跑完给观众看结果)
   followUp: null, // 观众刚提的方向 {text,page,at,rounds}:后续自动开发沿着它、以辅助为主
   autoTimes: [], // 最近自动创作注入时间(限流用)
+  pageReviews: {}, // 作品质量评审记录 {page:{score,issues,verdict,at,mtimeMs}}
   pagePolicy: {}, // 页面合规判定记录 {page:{noShow,category,why,at,mtimeMs}}(大模型判定,持久化)
   siteFirstAt: null,
   focus: null, // 自动创作聚焦 { action, page, title, rounds }
@@ -755,6 +795,7 @@ async function loadLive() {
       live.focus = d.focus && typeof d.focus === "object" ? d.focus : null;
       if (typeof d.page === "string") live.page = d.page;
       live.pagePolicy = (d.pagePolicy && typeof d.pagePolicy === "object") ? d.pagePolicy : {};
+      live.pageReviews = (d.pageReviews && typeof d.pageReviews === "object") ? d.pageReviews : {};
       live.autoTimes = Array.isArray(d.autoTimes) ? d.autoTimes.filter((t) => Date.now() - t < 3600 * 1000) : [];
       live.currentRun = [...live.executed].reverse().find((e) => e && e.status === "running") || null;
       live.audience = (d.audience && typeof d.audience === "object") ? d.audience : {};
@@ -771,7 +812,7 @@ function saveLive() {
       const tmp = STATE_FILE + ".tmp";
       const data = {
         round: live.round, autoDirect: live.autoDirect, options: live.options,
-        executed: live.executed.slice(-200), lastSentText: live.lastSentText, lastInjectAt: live.lastInjectAt, focus: live.focus, page: live.page, pagePolicy: live.pagePolicy, autoTimes: live.autoTimes,
+        executed: live.executed.slice(-200), lastSentText: live.lastSentText, lastInjectAt: live.lastInjectAt, focus: live.focus, page: live.page, pagePolicy: live.pagePolicy, autoTimes: live.autoTimes, pageReviews: live.pageReviews,
         audience: live.audience || {},
       };
       await writeFile(tmp, JSON.stringify(data));
@@ -1961,6 +2002,7 @@ async function proposePlan() {
       "【创作取向】优先:" + AUTO_STYLE + "。\n" +
       (fuActive ? "【跟随观众方向·最高优先】观众刚提:「" + String(fu.text || "").slice(0, 90) + "」" + (fu.page ? "(页面 " + fu.page + ")" : "") + "\n  → 这一轮**必须沿着这个方向做**,并且**以辅助开发为主**:补全功能/修问题/优化交互/补数据与入口/完善体验;**不要另起无关新主题**,也不要把方向改掉。\n" : "") +
       (AUTO_PROJECT ? (fuActive ? "【常驻项目(次优先,方向冲突时让位给观众)】" + AUTO_PROJECT + "\n" : "【常驻项目·最高优先】" + AUTO_PROJECT + "\n  → 这一轮**必须服务于这个项目**:优先 improve 项目页面 / 扩充项目的数据与维度 / 优化项目界面;不要另起无关新主题。\n") : "") +
+      "【专业度·红线,重要】要做**专业、实用、有信息密度**的东西(参考 Linear/Vercel/Stripe 仪表盘那种克制现代的风格);**不要**做省钱/账单/记账/待办/日历/天气卡片/优惠券/番茄钟/计算器合集这类平庸内容;设计必须**现代**:system-ui 字体、4/8 间距体系、12–16px 圆角+低对比描边+轻阴影、**一个主色+中性灰阶**、支持深色、数字右对齐 tabular-nums、hover/focus/空态/加载态/错误态齐全、响应式;**禁止** emoji 当图标刷屏/霓虹渐变/大段居中文字/无层级/长期「加载中…」。\n" +
       "【平台合规·重要】**操作过程中绝不把预览切到金融投资类页面**(股票/炒股/A股/港股/美股/行情/K线/基金/债券/期货/期权/外汇/虚拟货币/理财/投资/投顾/保险/贷款/信贷/信用卡/博彩/彩票/赌博/**押注/下注/赔率/竞猜**等)——未取得资质在直播间展示这些会被平台警告/断播;这类页面**保留**、观众自己从预览站访问没问题,但**before/after 与校验都别 goto 过去**,也别在直播里讲解。\n" +
       "【拒绝奶头乐,重要】**不要**做「点击得分/接住/躲避/跑酷/打怪/连连看」这类纯消遣小游戏,也不要只堆粒子特效刷屏。\n" +
       "【生活化·接入外部平台,重要】主题要**贴近日常生活**(吃穿住行玩买/健康/家庭/本地生活),**不要**做成程序员工具。要**接入外部平台内容**:\n" +
@@ -2289,6 +2331,7 @@ function onFinishedEvent() {
     live.holdUntil = Date.now() + VIEW_PAUSE_MS; // 给观众留时间看结果(期间不接新任务)
     if (live.session !== "idle") { live.session = "idle"; broadcastLive(); }
     showLatestPage(runText); // 精确切到刚改的页面/位置(优先用任务里的页面名)
+    reviewPage((runText.match(/([A-Za-z0-9_-]+\.html)/) || [])[1] || live.page, runText); // 自我评审(异步,不阻塞)
     changed();
     maybeInject();
   }, 1000);
