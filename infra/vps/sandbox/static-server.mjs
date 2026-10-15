@@ -2743,6 +2743,13 @@ async function handleAdmin(req, res) {
   else if (action === "add") handleChat(String(body.text || ""), String(body.channel || "admin"), String(body.name || ""));
   else if (action === "send") { const t = topOption(); if (t) await injectTop(t); }
   else if (action === "force") await forceRelay("admin 手动"); // 强制接棒(清僵尸 run)
+  else if (action === "review") { // 手动评审:{"action":"review","page":"xxx.html"}(不传 page 用当前页);force=true 忽略缓存
+    const pg = String(body.page || live.page || "").replace(/^\/+/, "");
+    if (body.force && live.pageReviews) delete live.pageReviews[pg];
+    const r = await reviewPage(pg, body.task || "");
+    return json(res, { ok: true, page: pg, review: r || null, reviews: live.pageReviews || {} });
+  }
+  else if (action === "reviews") { return json(res, { ok: true, reviews: live.pageReviews || {} }); }
   else if (action === "policy") { // 查看/清除页面合规判定记录(大模型判定结果)
     if (body.clear) { live.pagePolicy = {}; console.log("[live] admin 清空页面合规记录"); }
     return json(res, { ok: true, pagePolicy: live.pagePolicy || {} });
