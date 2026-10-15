@@ -50,6 +50,16 @@
   .tag{display:inline-block;font-size:11.5px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-variant-numeric:tabular-nums}
   .tag.done{color:var(--ok);border-color:#14532d}
   .empty{color:var(--dim);padding:26px 16px;text-align:center;font-size:14px}
+  #ctrl{display:flex;gap:10px;flex-wrap:wrap;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+  #ctrl .grp{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+  #ctrl .grp>b{font-size:12.5px;color:var(--dim);font-weight:600;margin-right:2px}
+  #ctrl button{font:inherit;font-size:13px;padding:5px 11px;border-radius:8px;border:1px solid var(--line);background:var(--card2);color:var(--fg);cursor:pointer}
+  #ctrl button:hover{border-color:var(--accent)}
+  #ctrl button.on{border-color:var(--accent);color:#93c5fd}
+  #ctrl input[type=number]{background:#0e141c;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:5px 8px;font:inherit;font-size:13px;width:64px}
+  #ctrl .sep{width:1px;align-self:stretch;background:var(--line)}
+  #ctrl .pill.on{color:#93c5fd;border-color:#1d4ed8}
+  #ctrl label.pill{padding:3px 10px}
   #admin{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
   #admin input{background:#0e141c;border:1px solid var(--line);color:var(--fg);border-radius:8px;padding:6px 10px;font:inherit;font-size:13px}
   #admin input#token{min-width:220px}
@@ -70,6 +80,25 @@
     <span class="spacer"></span>
     <a class="link" href="/board">← 返回榜单</a>
   </header>
+
+  <div id="ctrl">
+    <span class="grp"><b>导演</b>
+      <span class="pill" id="d-state">—</span>
+      <button data-act="director-pause">暂停</button>
+      <button data-act="director-resume">恢复</button>
+      <button data-act="director-now">立刻一轮</button>
+    </span>
+    <span class="sep"></span>
+    <span class="grp"><b>返工</b>
+      <label class="pill">上限 <input id="rmax" type="number" min="0" max="50" step="1"></label>
+      <button data-act="rework-max">应用</button>
+      <button id="lf" data-act="rework-lowfirst">低分优先</button>
+      <button data-act="rework-skip">跳过当前</button>
+      <button data-act="rework-clear">清空方向</button>
+    </span>
+    <span class="sep"></span>
+    <span class="grp"><b>管理令牌</b><input id="token" type="password" placeholder="PLAYGROUND_ADMIN_TOKEN"></span>
+  </div>
 
   <div id="rework" class="idle">
     <span class="k">返工队列</span>
@@ -92,7 +121,6 @@
   </section>
 
   <div id="admin">
-    <input id="token" type="password" placeholder="管理令牌">
     <input id="pg" type="text" placeholder="页面名，如 ai-models.html">
     <button id="do-review">立即评审</button>
     <button id="do-refresh">刷新</button>
@@ -115,6 +143,15 @@
     var run = (s.session === "running");
     $("p-session").className = "dot" + (run ? " on" : "");
     $("t-session").textContent = run ? "运行中" : (s.session === "idle" ? "空闲" : (s.session === "unknown" ? "未知" : (s.session || "未知")));
+
+    var dir = s.director || {};
+    $("d-state").textContent = dir.paused ? "已暂停" : "运行中";
+    $("d-state").className = "pill" + (dir.paused ? "" : " on");
+    if (document.activeElement !== $("rmax")) $("rmax").value = (dir.reworkMax != null ? dir.reworkMax : 3);
+    var lf = $("lf");
+    lf.className = dir.lowFirst ? "on" : "";
+    lf.textContent = "低分优先:" + (dir.lowFirst ? "开" : "关");
+    if (!dir.autoDirect) $("d-state").textContent = "接棒已关";
 
     var rw = s.rework, box = $("rework");
     if (rw) {
@@ -154,14 +191,33 @@
 
   var tokenEl = $("token");
   try { tokenEl.value = localStorage.getItem("zx_admin_token") || ""; } catch (e) {}
+  function admin(action, extra) {
+    try { localStorage.setItem("zx_admin_token", tokenEl.value); } catch (e) {}
+    var body = Object.assign({ action: action }, extra || {});
+    return fetch("/__lb/admin", { method: "POST", headers: { "content-type": "application/json", "x-admin-token": tokenEl.value }, body: JSON.stringify(body) })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function (d) { if (d && d.state) render(d.state); return d; });
+  }
+  var acts = $("ctrl").querySelectorAll("button[data-act]");
+  for (var i = 0; i < acts.length; i++) {
+    (function (b) {
+      b.addEventListener("click", function () {
+        var a = b.getAttribute("data-act");
+        var extra = null;
+        if (a === "rework-max") extra = { value: Number($("rmax").value) };
+        $("note").textContent = "执行 " + a + " …";
+        admin(a, extra)
+          .then(function () { $("note").textContent = "已执行 " + a; })
+          .catch(function (e) { $("note").textContent = "失败：" + e.message + "（检查令牌）"; });
+      });
+    })(acts[i]);
+  }
   $("do-refresh").addEventListener("click", load);
   $("do-review").addEventListener("click", function () {
     var pg = $("pg").value.trim();
     if (!pg) { $("pg").focus(); return; }
-    try { localStorage.setItem("zx_admin_token", tokenEl.value); } catch (e) {}
     $("note").textContent = "评审中…";
-    fetch("/__lb/admin", { method: "POST", headers: { "content-type": "application/json", "x-admin-token": tokenEl.value }, body: JSON.stringify({ action: "review", page: pg, force: true }) })
-      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    admin("review", { page: pg, force: true })
       .then(function (d) { $("note").textContent = "完成：" + (d.review ? ("评分 " + d.review.score + "/5") : "无结果"); load(); })
       .catch(function (e) { $("note").textContent = "失败：" + e.message + "（检查令牌）"; });
   });

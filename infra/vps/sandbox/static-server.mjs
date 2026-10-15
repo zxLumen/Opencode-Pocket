@@ -607,6 +607,27 @@ const QUALITY_SYS = "你是资深产品与前端评审,评估这个『直播里�
   + "评分:5=专业·实用·**视觉现代(2025 观感)**·信息密度好;4=不错;3=及格但有明显短板;2=粗糙/不实用/**风格陈旧像几年前**;1=低质/无用。\n"
   + "【合规约束】金融/投资/博彩等敏感类页面**只能有「新标签外链」入口**(target=\"_blank\" rel=\"noopener\");**不要建议把它们用 iframe 内嵌到别的页面**(那会出现在直播画面里,会被平台警告)。\n"
   + "只输出 JSON:{\"score\":1-5,\"issues\":[\"最该改的点(≤3条,每条≤20字)\"],\"verdict\":\"≤20字\"}。不要解释。";
+// 返工目标:从评审记录里挑"未满分且未达返工上限"的页(低分优先 或 按评审先后轮转)
+function pickRework() {
+  const effMax = (live.reworkMax != null ? live.reworkMax : REWORK_MAX);
+  const cands = Object.entries(live.pageReviews || {})
+    .map(([pg, r]) => ({ page: pg, score: Number(r.score) || 5, at: Number(r.at) || 0, tries: Number(r.tries) || 0, issues: Array.isArray(r.issues) ? r.issues : [] }))
+    .filter((c) => c.score < 5 && c.tries < effMax && c.issues.length);
+  if (!cands.length) return null;
+  cands.sort(live.reworkLowFirst ? ((a, b) => (a.score - b.score) || (a.at - b.at)) : ((a, b) => (a.at - b.at)));
+  return cands[0];
+}
+// 同步返工方向:不动 admin 手动指定的"观众方向"(那类等它自然过期),其余按 pickRework 选目标
+function syncRework() {
+  const cand = pickRework();
+  const cur = live.followUp;
+  if (cur && !cur.rework) { if (cand) console.log("[live] 有观众方向在手,返工排队中:", cand.page, "(" + cand.score + "分)"); return; }
+  if (!cand) { if (cur && cur.rework) { live.followUp = null; console.log("[live] 返工队列已清空 ✅"); } return; }
+  if (cur && cur.rework && cur.page === cand.page) return;
+  const r = live.pageReviews[cand.page] || {};
+  live.followUp = { text: "按评审意见改进(目标满分5分):" + (r.issues || []).join("; "), page: cand.page, at: Date.now(), rounds: 0, rework: true };
+  console.log("[live] 返工目标 →", cand.page, "(" + r.score + "分, 第 " + (r.tries || 0) + "/" + (live.reworkMax != null ? live.reworkMax : REWORK_MAX) + " 次)");
+}
 async function reviewPage(page, task) {
   if (!page || !GATEWAY_TOKEN) return null;
   let st = null; try { st = await stat(join(WORKSPACE, page)); } catch { return null; }
@@ -638,13 +659,14 @@ async function reviewPage(page, task) {
     const prevTries = (rec && rec.tries) || 0;
     live.pageReviews[page] = { score: score, issues: issues, verdict: String(o.verdict || "").slice(0, 30), at: Date.now(), mtimeMs: st.mtimeMs, tries: prevTries };
     console.log("[live] 作品评审:", page, "评分", score, "/5 |", String(o.verdict || ""), "| 待改:", issues.join("; "));
-    if (score < 5 && issues.length) { // 未满分 → 返工(直到 5 分;最多 REWORK_MAX 次)
-      if (prevTries < REWORK_MAX) {
+    const effMax = (live.reworkMax != null ? live.reworkMax : REWORK_MAX);
+    if (score < 5 && issues.length) {
+      if (prevTries < effMax) {
         live.pageReviews[page].tries = prevTries + 1;
-        live.followUp = { text: "按评审意见改进(目标满分5分):" + issues.join("; "), page: page, at: Date.now(), rounds: 0 };
-        console.log("[live] 质量未满分(" + score + ") → 返工 " + (prevTries + 1) + "/" + REWORK_MAX + ":", page);
-      } else console.log("[live] 已返工", REWORK_MAX, "次,接受", score, "分:", page);
+        console.log("[live] 质量未满分(" + score + ") → 返工 " + (prevTries + 1) + "/" + effMax + ":", page);
+      } else console.log("[live] 已返工", effMax, "次,接受", score, "分:", page);
     } else if (score >= 5) console.log("[live] 已满分 ✅", page);
+    syncRework();
     changed();
     return live.pageReviews[page];
   } catch { return null; }
@@ -785,6 +807,10 @@ let live = {
   autoTimes: [], // 最近自动创作注入时间(限流用)
   pageReviews: {}, // 作品质量评审记录 {page:{score,issues,verdict,at,mtimeMs}}
   pagePolicy: {}, // 页面合规判定记录 {page:{noShow,category,why,at,mtimeMs}}(大模型判定,持久化)
+  directorPaused: false, // 导演(自动创作)暂停开关(独立于观众接棒 autoDirect;admin 控制)
+  reworkMax: null, // 每页返工上限的运行时覆盖(null=用 env PLAYGROUND_REWORK_MAX)
+  reworkLowFirst: false, // 返工优先级:true=分数低的先返工,false=先评审到的先返工
+  autoForceAt: 0, // 一次性:admin「立刻一轮」→ 跳过间隔/停顿直接开跑
   siteFirstAt: null,
   focus: null, // 自动创作聚焦 { action, page, title, rounds }
   guide: null, // { examples:[...], at }
@@ -806,6 +832,10 @@ async function loadLive() {
       if (typeof d.page === "string") live.page = d.page;
       live.pagePolicy = (d.pagePolicy && typeof d.pagePolicy === "object") ? d.pagePolicy : {};
       live.pageReviews = (d.pageReviews && typeof d.pageReviews === "object") ? d.pageReviews : {};
+      if (typeof d.directorPaused === "boolean") live.directorPaused = d.directorPaused;
+      if (d.reworkMax != null) live.reworkMax = Math.max(0, Math.min(50, Number(d.reworkMax) || 0));
+      if (typeof d.reworkLowFirst === "boolean") live.reworkLowFirst = d.reworkLowFirst;
+      live.followUp = (d.followUp && typeof d.followUp === "object") ? d.followUp : null;
       live.autoTimes = Array.isArray(d.autoTimes) ? d.autoTimes.filter((t) => Date.now() - t < 3600 * 1000) : [];
       live.currentRun = [...live.executed].reverse().find((e) => e && e.status === "running") || null;
       live.audience = (d.audience && typeof d.audience === "object") ? d.audience : {};
@@ -822,6 +852,7 @@ function saveLive() {
       const tmp = STATE_FILE + ".tmp";
       const data = {
         round: live.round, autoDirect: live.autoDirect, options: live.options,
+        followUp: live.followUp, directorPaused: live.directorPaused, reworkMax: live.reworkMax, reworkLowFirst: live.reworkLowFirst,
         executed: live.executed.slice(-200), lastSentText: live.lastSentText, lastInjectAt: live.lastInjectAt, focus: live.focus, page: live.page, pagePolicy: live.pagePolicy, autoTimes: live.autoTimes, pageReviews: live.pageReviews,
         audience: live.audience || {},
       };
@@ -862,7 +893,8 @@ function publicState() {
     chat: { source: live.chat.source, enabled: live.chat.enabled, connected: live.chat.connected, loggedIn: live.chat.loggedIn, lastAt: live.chat.lastAt, lastDanmakuAt: live.chat.lastDanmakuAt, liveStatus: live.chat.liveStatus, liveStatusAt: live.chat.liveStatusAt, error: live.chat.error, detail: live.chat.detail, videoId: live.chat.videoId },
     reviews: Object.entries(live.pageReviews || {}).map(([pg, r]) => ({ page: pg, score: r.score, verdict: r.verdict || "", issues: r.issues || [], tries: r.tries || 0, at: r.at || 0 })).sort((a, b) => (a.score - b.score) || (b.at - a.at)),
     rework: live.followUp ? { text: live.followUp.text, page: live.followUp.page || "", rounds: live.followUp.rounds || 0, at: live.followUp.at || 0 } : null,
-    reworkMax: REWORK_MAX,
+    reworkMax: (live.reworkMax != null ? live.reworkMax : REWORK_MAX),
+    director: { paused: Boolean(live.directorPaused), reworkMax: (live.reworkMax != null ? live.reworkMax : REWORK_MAX), lowFirst: Boolean(live.reworkLowFirst), autoDirect: Boolean(live.autoDirect) },
     options,
     leader,
     executed: live.executed.slice(-40).reverse(),
@@ -2148,6 +2180,7 @@ async function autoQueueLoop() {
   for (;;) {
     await sleep(5000);
     if (!LIVE_ENABLED || !live.autoDirect) continue;
+    if (live.directorPaused) continue; // 导演暂停时也不往票池预放"自动"项
     if (live.blocked) continue;
     if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) continue;
     if (AUTO_CREATE_MAX > 0 && autoCount >= AUTO_CREATE_MAX) continue;
@@ -2179,18 +2212,20 @@ async function autoCreateLoop() {
   for (;;) {
     await sleep(5000);
     if (!LIVE_ENABLED || !live.autoDirect) continue;
+    if (live.directorPaused) continue; // 导演被 admin 暂停
+    const forceRun = Boolean(live.autoForceAt && Date.now() - live.autoForceAt < 90000); // admin「立刻一轮」
     if (live.blocked) continue;
     if (MAX_ROUNDS > 0 && live.round > MAX_ROUNDS) continue;
     if (AUTO_CREATE_MAX > 0 && autoCount >= AUTO_CREATE_MAX) continue;
-    if (Date.now() < live.holdUntil) continue; // 刚跑完,先让观众看结果
-    if (Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue; // 开跑按间隔(入池由排队器随时做)
+    if (!forceRun && Date.now() < live.holdUntil) continue; // 刚跑完,先让观众看结果
+    if (!forceRun && Date.now() - live.lastInjectAt < AUTO_CREATE_MS) continue; // 开跑按间隔(入池由排队器随时做)
     if (live.session !== "idle") continue;
     if (live.injecting) continue;
     if (live.options.some((o) => o.kind !== "auto")) continue; // 有观众票 → 让位,不抢
     // 限流:自动创作两轮之间至少 AUTO_MIN_INTERVAL_MS(默认 20 分钟;省 token)
     live.autoTimes = (live.autoTimes || []).filter((t) => Date.now() - t < 3600 * 1000);
     const lastAuto = live.autoTimes.length ? live.autoTimes[live.autoTimes.length - 1] : 0;
-    if (AUTO_MIN_INTERVAL_MS > 0 && lastAuto && Date.now() - lastAuto < AUTO_MIN_INTERVAL_MS) {
+    if (!forceRun && AUTO_MIN_INTERVAL_MS > 0 && lastAuto && Date.now() - lastAuto < AUTO_MIN_INTERVAL_MS) {
       if (Date.now() - (live.lastRateLogAt || 0) > 120000) { live.lastRateLogAt = Date.now(); console.log("[live] 自动创作间隔未到:距上轮", Math.round((Date.now() - lastAuto) / 60000), "分钟(需", Math.round(AUTO_MIN_INTERVAL_MS / 60000), "分钟)"); }
       continue;
     }
@@ -2779,6 +2814,22 @@ async function handleAdmin(req, res) {
     live.followUp = t ? { text: t.slice(0, 120), page: String(body.page || "").replace(/^\/+/, ""), at: Date.now(), rounds: 0 } : null;
     console.log("[live] admin 设置观众方向:", t ? t.slice(0, 60) : "(清除)");
   }
+  else if (action === "director-pause") { live.directorPaused = true; console.log("[live] admin:导演已暂停(自动创作停;观众接棒不受影响)"); }
+  else if (action === "director-resume") { live.directorPaused = false; live.autoForceAt = 0; console.log("[live] admin:导演已恢复"); }
+  else if (action === "director-now") { live.directorPaused = false; live.holdUntil = 0; live.autoForceAt = Date.now(); console.log("[live] admin:导演立刻开一轮(跳过间隔/展示停顿)"); }
+  else if (action === "rework-max") {
+    const n = Math.max(0, Math.min(50, Number(body.value != null ? body.value : body.max) || 0));
+    live.reworkMax = n; console.log("[live] admin:返工上限 =", n); syncRework();
+  }
+  else if (action === "rework-lowfirst") { live.reworkLowFirst = body.value == null ? !live.reworkLowFirst : Boolean(body.value); console.log("[live] admin:低分优先 =", live.reworkLowFirst); syncRework(); }
+  else if (action === "rework-skip") { // 跳过某页返工(记为已达上限)
+    const effMax = (live.reworkMax != null ? live.reworkMax : REWORK_MAX);
+    const pg = String(body.page || (live.followUp && live.followUp.page) || "").replace(/^\/+/, "");
+    if (pg && live.pageReviews[pg]) live.pageReviews[pg].tries = effMax;
+    if (live.followUp && (!pg || live.followUp.page === pg)) live.followUp = null;
+    console.log("[live] admin:跳过返工", pg || "(当前)"); syncRework();
+  }
+  else if (action === "rework-clear") { live.followUp = null; console.log("[live] admin:清空当前返工方向"); }
   else return json(res, { ok: false, error: "unknown action" });
   changed();
   return json(res, { ok: true, state: publicState() });
