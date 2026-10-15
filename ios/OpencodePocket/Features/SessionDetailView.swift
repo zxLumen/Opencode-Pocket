@@ -28,10 +28,15 @@ private struct BottomYKey: PreferenceKey {
 }
 private enum PullPhase: Equatable { case idle, armed, refreshing, done }
 
-/// 行位置盒子：刻意**不**做成 @State，写它不会触发重渲染，
+/// 行位置与滚动度量的盒子：刻意**不**做成 @State，写它不会触发重渲染，
 /// 从而避免「偏好 → state → 重渲染 → 新偏好」的每帧回环。
+/// 这些值只在事件回调里被读取（判定贴底 / 键盘重锚 / 上拉过卷），不需要驱动 UI。
 private final class FrameBox {
     var frames: [String: CGRect] = [:]
+    var topMinY: CGFloat = 0
+    var contentHeight: CGFloat = 0
+    var bottomMinY: CGFloat = .greatestFiniteMagnitude
+    var viewportHeight: CGFloat = 0
 }
 
 private func dismissKeyboard() {
@@ -71,19 +76,27 @@ struct SessionDetailView: View {
     @State private var showModels = false
     @State private var frames = FrameBox()
     @State private var pullPhase: PullPhase = .idle
-    @State private var bottomMinY: CGFloat = .greatestFiniteMagnitude
     @State private var refreshCount = 0
     @State private var lastRefreshAt: Date?
-    @State private var viewportHeight: CGFloat = 0
 
     private let pageSize = 50       // 首次加载（最近 50 条）
     private let olderBatch = 25     // 上拉到顶时每批再取
     private let windowMax = 150     // 内存 / 渲染窗口上限
 
-    /// 用底部哨兵判定「是否贴底」：LazyVStack 下 contentHeight 不可靠。
+    /// 是否贴底。**绝不能因为"量不到"就判定贴底**，否则会在你阅读中途
+    /// 被周期性刷新强行拽到底部。这里两个信号同时成立才算贴底，未知一律按"没贴底"。
     private var atBottom: Bool {
-        guard viewportHeight > 0, bottomMinY < .greatestFiniteMagnitude else { return true }
-        return bottomMinY <= viewportHeight + 80
+        guard frames.viewportHeight > 0 else { return true }   // 尚未测量（首帧）
+        // 底部哨兵被 LazyVStack 回收时拿不到值 → 说明离底部很远
+        guard frames.bottomMinY < .greatestFiniteMagnitude else { return false }
+        let sentinelSaysBottom = frames.bottomMinY <= frames.viewportHeight + 120
+        // 粗筛：只看"是否明显离底部很远"，防止哨兵值变陈旧而误判
+        var offsetSaysNotFar = true
+        if frames.contentHeight > 0 {
+            let maxScroll = max(frames.contentHeight - frames.viewportHeight, 0)
+            offsetSaysNotFar = (maxScroll - max(-frames.topMinY, 0)) <= 200
+        }
+        return sentinelSaysBottom && offsetSaysNotFar
     }
 
     private var session: Session? { store.session(sessionID) }
@@ -104,12 +117,12 @@ struct SessionDetailView: View {
                     .background(GeometryReader { g in
                         Color.clear.preference(key: ViewHKey.self, value: g.size.height)
                     })
-                    .onPreferenceChange(ViewHKey.self) { v in
-                        if abs(v - viewportHeight) > 0.5 { viewportHeight = v }
-                    }
-                    .onPreferenceChange(RowFrameKey.self) { frames.frames = $0 }   // 写进不发布的盒子，避免「重渲染回环」
+                    .onPreferenceChange(ViewHKey.self) { frames.viewportHeight = $0 }
+                    .onPreferenceChange(TopYKey.self) { frames.topMinY = $0 }
+                    .onPreferenceChange(ContentHKey.self) { frames.contentHeight = $0 }
+                    .onPreferenceChange(RowFrameKey.self) { frames.frames = $0 }
                     .onPreferenceChange(BottomYKey.self) { v in
-                        bottomMinY = v
+                        frames.bottomMinY = v
                         pullEvaluate()
                     }
                     .onPreferenceChange(TopYKey.self) { minY in
@@ -124,7 +137,11 @@ struct SessionDetailView: View {
                         if let id = bottomAnchorID() { reanchor(proxy, id) }
                     }
                     .onChange(of: messages.count) { _, _ in if atBottom { scrollToBottom(proxy) } }
-                    .onChange(of: store.refreshTick) { _, _ in Task { await refreshNewest(); if atBottom { scrollToBottom(proxy) } } }
+                    .onChange(of: store.refreshTick) { _, _ in
+                        // 刷新前先记录是否贴底：避免 await 期间位置变化导致误滚
+                        let wasAtBottom = atBottom
+                        Task { await refreshNewest(); if wasAtBottom, atBottom { scrollToBottom(proxy) } }
+                    }
                     .task {
                         seedFromCache()
                         store.markViewed(sessionID)
@@ -304,8 +321,8 @@ struct SessionDetailView: View {
     /// 底部过卷（上拉）超出阈值就触发刷新。
     /// 直接量底部哨兵被推出视口多少：过卷量 = viewportHeight - 哨兵.minY。
     private func pullEvaluate() {
-        guard didInitialScroll, viewportHeight > 0, pullPhase != .refreshing else { return }
-        let overscroll = viewportHeight - bottomMinY
+        guard didInitialScroll, frames.viewportHeight > 0, pullPhase != .refreshing else { return }
+        let overscroll = frames.viewportHeight - frames.bottomMinY
         switch pullPhase {
         case .idle:
             if overscroll >= 40 {
@@ -356,7 +373,7 @@ struct SessionDetailView: View {
 
     /// 视口内"最靠底部"的那条消息（= 输入框正上方那一行）的 id。
     private func bottomAnchorID() -> String? {
-        let vh = viewportHeight > 0 ? viewportHeight : .greatestFiniteMagnitude
+        let vh = frames.viewportHeight > 0 ? frames.viewportHeight : .greatestFiniteMagnitude
         let visible = frames.frames.filter { $0.value.maxY > 0 && $0.value.minY < vh }
         return visible.max { $0.value.minY < $1.value.minY }?.key
     }
