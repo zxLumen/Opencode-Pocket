@@ -23,6 +23,10 @@ NOTIFY_MIN_GAP="${NOTIFY_MIN_GAP:-43200}"
 SWITCH_RETRY_GAP="${SWITCH_RETRY_GAP:-21600}"
 WIFI_INTERFACE="${WIFI_INTERFACE:-en0}"
 WIFI_JOIN_TIMEOUT="${WIFI_JOIN_TIMEOUT:-20}"
+# 随机抖动上限（秒）。必须在这里给定默认值：脚本是 set -u，
+# 而算术表达式 $((RANDOM % JITTER_MAX_SECONDS)) 里的裸变量不会被 ${VAR:-} 兜住，
+# 曾经因此每次运行都在 183 行直接退出（静默挂了 8 天，描述文件过期才发现）。
+JITTER_MAX_SECONDS="${JITTER_MAX_SECONDS:-300}"
 
 # 自家 Wi-Fi（SG659HZ 5G 会隔离同频段客户端，故续签时需切到另一频段）。
 WIFI_LOCAL_FILE="$ROOT/scripts/wifi.local.sh"
@@ -73,6 +77,17 @@ notify_once() {
   if [ -z "$last" ] || [ $((now - last)) -ge "$gap" ]; then notify "$title" "$msg"; write_state "$key" "$now"; fi
   return 0
 }
+
+# ===== 失败可见 =====
+# 出错时写日志 + 发通知。之前正是因为静默退出，挂了 8 天没人知道。
+on_err() {
+  local line="$1" rc="$2"
+  echo "[$(date '+%F %T')] !! 脚本异常退出 rc=$rc line=$line"
+  [ "$MODE" = "--status" ] && return 0
+  notify_once errNotifyAt "$NOTIFY_TITLE 续签异常" "auto-renew 第 ${line} 行退出(rc=$rc)，详见 auto-renew.log" "$NOTIFY_MIN_GAP"
+  return 0
+}
+trap 'on_err "$LINENO" "$?"' ERR
 profile_expiry() {
   local f name exp
   for f in "$HOME"/Library/Developer/Xcode/UserData/Provisioning\ Profiles/*.mobileprovision; do
@@ -143,13 +158,23 @@ restore_cached_profiles() {
   done < <(profile_cache_dirs)
 }
 do_renew() {
-  local bk="$ROOT/.build/profile-backup" new_exp now
+  local bk="$ROOT/.build/profile-backup" new_exp now build_log
   rm -rf "$bk"; mkdir -p "$bk"; purge_cached_profiles "$bk"
   echo "==> 续签并重装真机版"
+  build_log="$ROOT/.build/last-build.log"
   if ! xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
       -destination "id=$DEVICE_UDID" -derivedDataPath .build/device build \
       CODE_SIGN_STYLE=Automatic CODE_SIGNING_ALLOWED=YES -allowProvisioningUpdates \
-      DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM"; then
+      DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" >"$build_log" 2>&1; then
+    grep -E "error:" "$build_log" 2>/dev/null | tail -3 || true
+    # 最常见的失败是 Xcode 里 Apple ID 掉登录（免费个人团队续签必须有登录态）
+    if grep -q "No Accounts" "$build_log" 2>/dev/null; then
+      notify "$NOTIFY_TITLE 需要重新登录 Xcode" "Xcode 里 Apple ID 已掉登录，请到 Xcode → Settings → Accounts 重新登录后再续签"
+      echo "!! 原因：Xcode 未登录 Apple ID（Settings → Accounts 重新登录）"
+    elif grep -q "No profiles for" "$build_log" 2>/dev/null; then
+      notify "$NOTIFY_TITLE 需要重新登录 Xcode" "找不到可用描述文件，通常是 Apple ID 登录态失效；请到 Xcode → Settings → Accounts 检查"
+      echo "!! 原因：没有可用描述文件（多半是账号登录态失效）"
+    fi
     echo "!! 构建失败，还原缓存描述文件"; restore_cached_profiles "$bk"; return 1
   fi
   # 只重装、不启动：续签只需带新描述文件重装（后台静默，手机端零动作）
@@ -180,7 +205,7 @@ if [ "$MODE" != "--status" ] && [ "$MODE" != "--test-notify" ]; then
   trap on_exit EXIT INT TERM
   exec >>"$LOG" 2>&1
   jitter=0
-  [ "${JITTER_MAX_SECONDS:-300}" -gt 0 ] && jitter=$((RANDOM % JITTER_MAX_SECONDS))
+  [ "${JITTER_MAX_SECONDS:-300}" -gt 0 ] && jitter=$((RANDOM % ${JITTER_MAX_SECONDS:-300}))
   [ "$jitter" -gt 0 ] && { echo "随机抖动 ${jitter}s"; sleep "$jitter"; }
 fi
 
@@ -205,6 +230,14 @@ awk -v d="$DAYS_LEFT" -v t="$PROFILE_DAYS_THRESHOLD" 'BEGIN{exit !(d<=t)}' && NE
 [ "$MODE" = "--force" ] && NEED_RENEW=1
 echo "描述文件: $EXP_RAW (剩余 ${DAYS_LEFT} 天)"
 
+# 描述文件已过期 / 显式 --force 时，不再因"App 正在运行"而顺延：
+# 此时 App 本来就用不了，续签优先级最高（安装会替换掉运行中的实例）。
+PROFILE_EXPIRED=0
+awk -v d="$DAYS_LEFT" 'BEGIN{exit !(d<=0)}' && PROFILE_EXPIRED=1
+SKIP_IF_APP_RUNNING=1
+[ "$PROFILE_EXPIRED" -eq 1 ] && SKIP_IF_APP_RUNNING=0
+[ "$MODE" = "--force" ] && SKIP_IF_APP_RUNNING=0
+
 if [ "$MODE" = "--status" ]; then
   cur_ssid="$(current_ssid || true)"
   if probe_device_retry 3; then dev_reach="可达"; else dev_reach="不可达"; fi
@@ -216,11 +249,12 @@ fi
 
 # ===== 2) 需要续签 =====
 if probe_device_retry 3; then
-  if app_is_running; then
+  if [ "$SKIP_IF_APP_RUNNING" -eq 1 ] && app_is_running; then
     echo "当前频段可达，但 App 正在运行，本轮跳过（不安装、手机端零动作）"
     notify_once appRunningNudgeAt "$NOTIFY_TITLE 暂缓续签" "App 正在运行，为避免打扰已顺延，退出 App 后将自动续签" "$RENEW_NUDGE_GAP"
     exit 0
   fi
+  [ "$SKIP_IF_APP_RUNNING" -eq 0 ] && echo "（描述文件已过期/--force：忽略 App 运行状态，直接续签）"
   echo "当前频段可达（SSID=$(current_ssid)），直接续签"; do_renew; exit 0
 fi
 
@@ -248,10 +282,11 @@ write_state lastSwitchAttemptAt "$NOW"; RESTORE_ON_EXIT=1
 if wifi_join "$ALT_SSID"; then
   echo "已切到 $ALT_SSID"
   if probe_device_retry 8; then
-    if app_is_running; then
+    if [ "$SKIP_IF_APP_RUNNING" -eq 1 ] && app_is_running; then
       echo "已切到 ${ALT_SSID}，但 App 正在运行，本轮跳过（立即切回）"
       notify_once appRunningNudgeAt "$NOTIFY_TITLE 暂缓续签" "App 正在运行，为避免打扰已顺延，退出 App 后将自动续签" "$RENEW_NUDGE_GAP"
     else
+      [ "$SKIP_IF_APP_RUNNING" -eq 0 ] && echo "（描述文件已过期/--force：忽略 App 运行状态，直接续签）"
       do_renew
     fi
   else
