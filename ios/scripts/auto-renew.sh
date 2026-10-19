@@ -220,7 +220,10 @@ fi
 # ===== 1) 是否需要续签 =====
 EXP_RAW="$(profile_expiry || true)"
 if [ -z "$EXP_RAW" ]; then
-  echo "未找到 $BUNDLE_ID 的描述文件"; notify "$NOTIFY_TITLE 续签异常" "未找到描述文件，请手动检查签名"; exit 0
+  # 缓存描述文件可能被 Xcode/清理删掉；这恰恰是需要续签的表现，
+  # 不能就此退出——交给 -allowProvisioningUpdates 重新生成。
+  echo "未找到 $BUNDLE_ID 的缓存描述文件 —— 视为需要续签，尝试重新生成"
+  EXP_RAW=""
 fi
 EXP_EPOCH="$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$EXP_RAW" "+%s" 2>/dev/null || echo 0)"
 NOW="$(date +%s)"
@@ -228,7 +231,7 @@ DAYS_LEFT="$(awk -v a="$EXP_EPOCH" -v b="$NOW" 'BEGIN{printf "%.2f",(a-b)/86400}
 NEED_RENEW=0
 awk -v d="$DAYS_LEFT" -v t="$PROFILE_DAYS_THRESHOLD" 'BEGIN{exit !(d<=t)}' && NEED_RENEW=1
 [ "$MODE" = "--force" ] && NEED_RENEW=1
-echo "描述文件: $EXP_RAW (剩余 ${DAYS_LEFT} 天)"
+echo "描述文件: ${EXP_RAW:-（无缓存，待重新生成）} (剩余 ${DAYS_LEFT} 天)"
 
 # 描述文件已过期 / 显式 --force 时，不再因"App 正在运行"而顺延：
 # 此时 App 本来就用不了，续签优先级最高（安装会替换掉运行中的实例）。

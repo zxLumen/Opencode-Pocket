@@ -97,6 +97,8 @@ check_app() {   # $1=label $2=project_dir $3=bundle_id $4=显示名
   [ -d "$dir" ] || { log "跳过（目录不存在）：$disp ($dir)"; return 0; }
   logf="$dir/.build/auto-renew.log"
   statef="$dir/.build/auto-renew.state"
+  last_renew="$(sed -n 's/^lastRenewAt=//p' "$statef" 2>/dev/null | tail -1 || true)"
+  now="$(date +%s)"
 
   # 1) 描述文件剩余天数
   days="$(profile_days_left "$bid")"
@@ -108,15 +110,19 @@ check_app() {   # $1=label $2=project_dir $3=bundle_id $4=显示名
     fi
   fi
 
-  # 2) 续签日志里最近的异常
+  # 2) 续签日志里最近的异常（忽略"上次成功续签之前"的旧报错）
   if [ -f "$logf" ]; then
     local cutoff; cutoff="$(date -v-"${ERR_LOOKBACK_HOURS}"H '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo '')"
-    local recent
+    local recent ts ts_epoch fresh
     recent="$(grep '^\[.*\] !!' "$logf" 2>/dev/null | tail -1 || true)"
     if [ -n "$recent" ]; then
-      # recent 形如 [2026-10-19 14:22:14] !! ...
-      local ts; ts="$(printf '%s' "$recent" | sed -n 's/^\[\([^]]*\)\].*/\1/p')"
-      if [ -n "$cutoff" ] && [ -n "$ts" ] && [[ "$ts" > "$cutoff" ]]; then
+      ts="$(printf '%s' "$recent" | sed -n 's/^\[\([^]]*\)\].*/\1/p')"
+      ts_epoch="$(date -j -f "%Y-%m-%d %H:%M:%S" "$ts" '+%s' 2>/dev/null || echo 0)"
+      fresh=1
+      [ -n "$cutoff" ] && [ -n "$ts" ] && [[ "$ts" > "$cutoff" ]] || fresh=0
+      # 若之后已经成功续签过，则这条旧报错不再算问题
+      if [ -n "$last_renew" ] && [ "$ts_epoch" -le "$last_renew" ]; then fresh=0; fi
+      if [ "$fresh" -eq 1 ]; then
         alert_once "${label}.err" "$disp 续签脚本报错" "$(printf '%s' "$recent" | cut -c1-90)"
       fi
     fi
@@ -125,8 +131,6 @@ check_app() {   # $1=label $2=project_dir $3=bundle_id $4=显示名
   fi
 
   # 3) 多久没成功续签
-  last_renew="$(sed -n 's/^lastRenewAt=//p' "$statef" 2>/dev/null | tail -1 || true)"
-  now="$(date +%s)"
   if [ -n "$last_renew" ]; then
     stale_after="$(awk -v s="$RENEW_STALE_DAYS" 'BEGIN{printf "%.0f", s*86400}')"
     if [ $((now - last_renew)) -gt "$stale_after" ]; then
