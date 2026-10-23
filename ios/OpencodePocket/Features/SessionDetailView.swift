@@ -444,9 +444,9 @@ struct SessionDetailView: View {
         // （agent 在两次轮询之间爆发式产出），补拉一整页。
         if bottom, !messages.isEmpty, page.items.count >= liveBatch {
             let fetched = Set(page.items.map(\.id))
-            if !messages.contains(where: { fetched.contains($0.id) }),
-               let full = await store.loadMessages(sessionID: sessionID, limit: pageSize), full.ok {
-                page = full
+            if !messages.contains(where: { fetched.contains($0.id) }) {
+                let full = await store.loadMessages(sessionID: sessionID, limit: pageSize)
+                if full.ok { page = full }
             }
         }
         var byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
