@@ -72,6 +72,7 @@ struct SessionDetailView: View {
     @State private var messages: [Message] = []
     @State private var olderCursor: String?
     @State private var loadingOlder = false
+    @State private var loadInFlight = false
     @State private var didInitialScroll = false
     @State private var showModels = false
     @State private var frames = FrameBox()
@@ -80,6 +81,7 @@ struct SessionDetailView: View {
     @State private var lastRefreshAt: Date?
 
     private let pageSize = 50       // 首次加载（最近 50 条）
+    private let liveBatch = 12      // 轮询只取最新一小批（历史页里可能有几张图/几 MB 的 shell 输出）
     private let olderBatch = 25     // 上拉到顶时每批再取
     private let windowMax = 150     // 内存 / 渲染窗口上限
 
@@ -273,7 +275,17 @@ struct SessionDetailView: View {
             errorBanner("上次执行失败（可继续对话重试）")
         }
         if let err = store.lastError, !err.isEmpty {
-            Label(err, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
+            HStack(alignment: .top, spacing: 6) {
+                Label(err, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button { store.lastError = nil } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
@@ -400,7 +412,14 @@ struct SessionDetailView: View {
     }
 
     private func reload() async {
+        // 同一个会话同一时间只发一个消息请求：轮询 / refreshTick / 上拉
+        // 很容易叠在一起，叠多了反而更容易被取消、也更拖慢服务端。
+        guard !loadInFlight else { return }
+        loadInFlight = true
+        defer { loadInFlight = false }
+
         let page = await store.loadMessages(sessionID: sessionID, limit: pageSize)
+        guard page.ok else { return }   // 失败/被取消：保留缓存，等下一轮刷新
         messages = page.items.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
         if messages.count > windowMax { messages = Array(messages.suffix(windowMax)) }
         olderCursor = page.previous
@@ -412,8 +431,24 @@ struct SessionDetailView: View {
     /// - 不在底部时：只**更新已有消息**（流式内容等），不并入新消息，
     ///   也不裁老消息——否则你上翻看历史时窗口会被顶得来回抖动、跳位。
     private func refreshNewest() async {
-        let page = await store.loadMessages(sessionID: sessionID, limit: pageSize)
-        let bottom = atBottom
+        guard !loadInFlight else { return }
+        loadInFlight = true
+        defer { loadInFlight = false }
+
+        var page = await store.loadMessages(sessionID: sessionID,
+                                            limit: messages.isEmpty ? pageSize : liveBatch)
+        guard page.ok else { return }   // 失败/被取消：不要把空数组当成"最新一页"
+        // 本地没有消息时（首次加载失败后重试），按贴底处理，直接铺满。
+        let bottom = atBottom || messages.isEmpty
+        // 轮询只取 12 条：如果这 12 条和本地完全没有重叠，说明中间漏了消息
+        // （agent 在两次轮询之间爆发式产出），补拉一整页。
+        if bottom, !messages.isEmpty, page.items.count >= liveBatch {
+            let fetched = Set(page.items.map(\.id))
+            if !messages.contains(where: { fetched.contains($0.id) }),
+               let full = await store.loadMessages(sessionID: sessionID, limit: pageSize), full.ok {
+                page = full
+            }
+        }
         var byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         if bottom {
             for m in page.items { byId[m.id] = m }
@@ -432,10 +467,13 @@ struct SessionDetailView: View {
 
     /// 上拉到顶：再取一批更早的；超过窗口上限就从**最新端**裁（因为你正在往回看）。
     private func loadOlder(_ proxy: ScrollViewProxy) async {
-        guard didInitialScroll, !loadingOlder, let cursor = olderCursor, !cursor.isEmpty else { return }
+        guard didInitialScroll, !loadingOlder, !loadInFlight, let cursor = olderCursor, !cursor.isEmpty else { return }
         loadingOlder = true
+        loadInFlight = true
+        defer { loadingOlder = false; loadInFlight = false }
         let anchor = messages.first?.id
         let page = await store.loadMessages(sessionID: sessionID, limit: olderBatch, cursor: cursor)
+        guard page.ok else { return }   // 失败/取消：保留游标，下次还能继续翻
         var byId = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         for m in page.items { byId[m.id] = m }
         var merged = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
@@ -447,7 +485,6 @@ struct SessionDetailView: View {
             try? await Task.sleep(nanoseconds: 30_000_000)
             proxy.scrollTo(anchor, anchor: .top)
         }
-        loadingOlder = false
     }
 
     // MARK: - Header / menus

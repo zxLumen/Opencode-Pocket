@@ -38,6 +38,14 @@ struct MessagesResponse: Decodable {
     struct Cursor: Decodable { var previous: String?; var next: String? }
 }
 
+/// 一次消息拉取的结果。`ok == false` 表示这次没拿到数据（失败或被取消），
+/// 调用方必须保留现有消息，绝不能用空数组覆盖缓存。
+struct MessagePage: Sendable {
+    var items: [Message]
+    var previous: String?
+    var ok: Bool
+}
+
 private struct PermissionItemDTO: Decodable {
     var id: String
     var sessionID: String?
@@ -141,6 +149,12 @@ final class PocketStore {
             startEvents()
             startPolling()
         } catch {
+            // 切后台 / 页面被移除时 URLSession 会取消请求（-999 cancelled）。
+            // 这不是连接失败：保持「未连接」，回到前台时会自动重连。
+            if Self.isCancellation(error) {
+                phase = .disconnected
+                return
+            }
             let msg = Self.friendly(error)
             phase = .failed(msg)
             lastError = msg
@@ -160,7 +174,17 @@ final class PocketStore {
         }
     }
 
+    /// 请求被取消不是错误：视图消失、App 切后台、或者上游主动取消都会让
+    /// URLSession 抛 `URLError.cancelled`（NSURLErrorDomain -999）。
+    /// 以前它被当成「消息解析失败」弹成一大段红字，还会让详情页以为这一页是空的。
+    static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        let ns = error as NSError
+        return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled
+    }
+
     static func friendly(_ error: Error) -> String {
+        if isCancellation(error) { return "请求已取消" }
         if isNetwork(error) { return "连接中断：Mac 可能已休眠/离线，或网络不可用。正在自动重连…" }
         return error.localizedDescription
     }
@@ -180,6 +204,7 @@ final class PocketStore {
     }
 
     private func markOfflineIfNetwork(_ error: Error) {
+        guard !Self.isCancellation(error) else { return }
         if Self.isNetwork(error) {
             offline = true
             eventsConnected = false
@@ -369,38 +394,54 @@ final class PocketStore {
     }
 
     /// 拉取一页消息（默认最新 N 条，倒序返回），并给出更早一页的 cursor。
-    func loadMessages(sessionID: String, limit: Int = 25, cursor: String? = nil) async -> (items: [Message], previous: String?) {
-        guard let c = try? client() else { return ([], nil) }
-        var q = [URLQueryItem(name: "limit", value: String(limit)),
-                 URLQueryItem(name: "order", value: "desc")]
-        if let cursor, !cursor.isEmpty { q.append(URLQueryItem(name: "cursor", value: cursor)) }
+    /// 失败或被取消时 `ok == false`，调用方必须保留已有消息/游标。
+    func loadMessages(sessionID: String, limit: Int = 25, cursor: String? = nil) async -> MessagePage {
+        guard let c = try? client() else { return MessagePage(items: [], previous: nil, ok: false) }
+        var q = [URLQueryItem(name: "limit", value: String(limit))]
+        // opencode 规定 cursor 不能和 order 一起传（否则 400 InvalidCursorError）。
+        // 第一页用 desc 拿最新 N 条；翻更早的页时只带 cursor。
+        if let cursor, !cursor.isEmpty {
+            q.append(URLQueryItem(name: "cursor", value: cursor))
+        } else {
+            q.append(URLQueryItem(name: "order", value: "desc"))
+        }
         do {
-            let r = try await c.getData("/api/session/\(sessionID)/message", query: q, as: MessagesResponse.self)
-            if lastError?.hasPrefix("消息解析失败") == true { lastError = nil }
-            return (r.data, r.cursor?.previous)
+            let r = try await fetchMessages(with: c, sessionID: sessionID, query: q)
+            if lastError?.hasPrefix("消息") == true { lastError = nil }
+            return MessagePage(items: r.data, previous: r.cursor?.previous, ok: true)
         } catch {
+            // 取消是正常生命周期（离开页面 / 切后台），既不报错也不标记离线；
+            // 下一轮刷新会重新拉取。
+            if Self.isCancellation(error) {
+                return MessagePage(items: [], previous: nil, ok: false)
+            }
             markOfflineIfNetwork(error)
             // 解码失败绝不能静默：否则详情页会「卡住不动」，
             // 表现为报错/新内容永远刷不出来（历史上踩过一次）。
             if !Self.isNetwork(error) {
-                lastError = "消息解析失败：\(Self.decodeSummary(error))"
+                if let api = error as? APIError, case .decode(let detail) = api {
+                    lastError = "消息解析失败：\(detail)"
+                } else {
+                    lastError = "消息加载失败：\(error.localizedDescription)"
+                }
             }
-            return ([], nil)
+            return MessagePage(items: [], previous: nil, ok: false)
         }
     }
 
-    /// 把 DecodingError 压成一句能看懂的说明（含出错字段路径）。
-    private static func decodeSummary(_ error: Error) -> String {
-        guard let e = error as? DecodingError else { return "\(error)" }
-        func path(_ p: [CodingKey]) -> String {
-            p.map { $0.intValue.map { "[\($0)]" } ?? $0.stringValue }.joined(separator: ".")
-        }
-        switch e {
-        case .typeMismatch(_, let ctx):  return "字段 \(path(ctx.codingPath)) 类型不匹配"
-        case .valueNotFound(_, let ctx): return "字段 \(path(ctx.codingPath)) 缺失值"
-        case .keyNotFound(let k, _):     return "缺少字段 \(k.stringValue)"
-        case .dataCorrupted(let ctx):    return "数据损坏 @ \(path(ctx.codingPath))"
-        @unknown default:                return "\(error)"
+    /// 优先走 pocketd 的 `/messages` 中继：它会丢掉 tool.state.input/output 等
+    /// 超大字段（实测一页 50 条从 6.4MB 降到 64KB），手机端轮询才不会超时/被取消。
+    /// 连的是没有 pocketd 的裸 opencode（或旧版 pocketd）时，回退到官方接口。
+    private func fetchMessages(with c: APIClient, sessionID: String,
+                               query: [URLQueryItem]) async throws -> MessagesResponse {
+        do {
+            var q = [URLQueryItem(name: "session", value: sessionID)]
+            q.append(contentsOf: query)
+            return try await c.getData("/pocketd/messages", query: q, as: MessagesResponse.self)
+        } catch let api as APIError {
+            guard case .status(let code, _) = api,
+                  [404, 405, 501, 502].contains(code) else { throw api }
+            return try await c.getData("/api/session/\(sessionID)/message", query: query, as: MessagesResponse.self)
         }
     }
 

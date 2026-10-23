@@ -75,6 +75,18 @@ data: {"id":"evt_...","created":1791713944831,"type":"session.reasoning.delta",
 - `session.idle` / `session.error`
 - `message.updated` / `message.part.updated`（经典消息流）
 
+## 消息分页规则（实测）
+
+`GET /api/session/{sessionID}/message` 的 `cursor` 与 `order` **互斥**：同时传会返回
+`400 InvalidCursorError`。第一页传 `?limit=50&order=desc`，之后翻页只传
+`?limit=25&cursor=<cursor.previous>`（不要带 `order`）。
+
+消息里的 `content[].state.input/output` 可能极大（一次 shell 输出几百 KB，50 条能到
+6MB+），手机端轮询会超时并被系统取消（`NSURLError -999`）。因此 App 走
+`pocketd` 的 `GET /pocketd/messages?session=...&limit=...&order=...`（或 `cursor=...`）
+中继：只保留 `id/type/agent/model/time/text/finish/error` 和
+`content[].{type,text,name,state.status}`，一页通常从 MB 级降到几十 KB。
+
 ## 服务发现
 
 `~/.local/state/opencode/service.json`:

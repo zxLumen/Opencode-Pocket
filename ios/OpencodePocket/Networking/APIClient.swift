@@ -14,6 +14,15 @@ enum APIError: Error, LocalizedError {
     }
 }
 
+/// 请求被取消（页面切走、App 进入后台、切换网络）不是错误，绝不能在界面上报错。
+/// URLSession 在 Task 取消时会抛 `URLError.cancelled`（-999），这里统一识别。
+func isCancellationError(_ error: Error) -> Bool {
+    if error is CancellationError { return true }
+    if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+    let ns = error as NSError
+    return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled
+}
+
 struct APIClient: Sendable {
     let base: URL
     let authorization: String
@@ -46,7 +55,13 @@ struct APIClient: Sendable {
             req.httpBody = try JSONSerialization.data(withJSONObject: json)
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp): (Data, URLResponse)
+        do {
+            (data, resp) = try await URLSession.shared.data(for: req)
+        } catch {
+            if isCancellationError(error) { throw CancellationError() }
+            throw error
+        }
         guard let http = resp as? HTTPURLResponse else { throw APIError.status(-1, "无响应") }
         guard (200..<300).contains(http.statusCode) else {
             throw APIError.status(http.statusCode, String(data: data, encoding: .utf8) ?? "")
@@ -57,7 +72,7 @@ struct APIClient: Sendable {
     func get<T: Decodable>(_ path: String, query: [URLQueryItem] = [], as type: T.Type) async throws -> T {
         let data = try await request(path, query: query)
         do { return try JSONDecoder().decode(T.self, from: data) }
-        catch { throw APIError.decode(String(describing: error)) }
+        catch { throw APIError.decode(Self.decodeSummary(error)) }
     }
 
     /// GET that unwraps a `{ "data": T }` envelope, falling back to bare T.
@@ -65,7 +80,22 @@ struct APIClient: Sendable {
         let data = try await request(path, query: query)
         if let wrapped = try? JSONDecoder().decode(Wrapped<T>.self, from: data) { return wrapped.data }
         do { return try JSONDecoder().decode(T.self, from: data) }
-        catch { throw APIError.decode(String(describing: error)) }
+        catch { throw APIError.decode(Self.decodeSummary(error)) }
+    }
+
+    /// 把 DecodingError 压成一句能看懂的说明（含出错字段路径）。
+    private static func decodeSummary(_ error: Error) -> String {
+        guard let e = error as? DecodingError else { return error.localizedDescription }
+        func path(_ p: [CodingKey]) -> String {
+            p.map { $0.intValue.map { "[\($0)]" } ?? $0.stringValue }.joined(separator: ".")
+        }
+        switch e {
+        case .typeMismatch(_, let ctx):  return "字段 \(path(ctx.codingPath)) 类型不匹配"
+        case .valueNotFound(_, let ctx): return "字段 \(path(ctx.codingPath)) 缺失值"
+        case .keyNotFound(let k, _):     return "缺少字段 \(k.stringValue)"
+        case .dataCorrupted(let ctx):    return "数据损坏 @ \(path(ctx.codingPath))"
+        @unknown default:                return error.localizedDescription
+        }
     }
 
     func getRawJSON(_ path: String, query: [URLQueryItem] = []) async throws -> Any {
@@ -90,7 +120,13 @@ struct APIClient: Sendable {
         req.setValue(authorization, forHTTPHeaderField: "Authorization")
         req.setValue(contentType, forHTTPHeaderField: "Content-Type")
         req.httpBody = data
-        let (d, resp) = try await URLSession.shared.data(for: req)
+        let (d, resp): (Data, URLResponse)
+        do {
+            (d, resp) = try await URLSession.shared.data(for: req)
+        } catch {
+            if isCancellationError(error) { throw CancellationError() }
+            throw error
+        }
         guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw APIError.status((resp as? HTTPURLResponse)?.statusCode ?? -1, String(data: d, encoding: .utf8) ?? "")
         }
