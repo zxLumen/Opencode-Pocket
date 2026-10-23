@@ -17,7 +17,7 @@ APP=".build/device/Build/Products/Debug-iphoneos/OpencodePocket.app"
 APP_PROC_MATCH="OpencodePocket.app"
 NOTIFY_TITLE="口袋opencode"
 
-PROFILE_DAYS_THRESHOLD="${PROFILE_DAYS_THRESHOLD:-3}"
+PROFILE_DAYS_THRESHOLD="${PROFILE_DAYS_THRESHOLD:-5}"
 RENEW_NUDGE_GAP="${RENEW_NUDGE_GAP:-86400}"
 NOTIFY_MIN_GAP="${NOTIFY_MIN_GAP:-43200}"
 SWITCH_RETRY_GAP="${SWITCH_RETRY_GAP:-21600}"
@@ -103,14 +103,18 @@ profile_expiry() {
 }
 current_ssid() { ipconfig getsummary "$WIFI_INTERFACE" 2>/dev/null | awk -F': ' '/ SSID /{print $2; exit}'; }
 wifi_join() {
-  local ssid="$1" i cur
+  local ssid="$1" i cur attempt
   [ -n "$ssid" ] || return 1
-  networksetup -setairportnetwork "$WIFI_INTERFACE" "$ssid" "$WIFI_PASSWORD" >/dev/null 2>&1 || true
-  i=0
-  while [ "$i" -lt "$WIFI_JOIN_TIMEOUT" ]; do
-    cur="$(current_ssid || true)"
-    if [ "$cur" = "$ssid" ] && ifconfig "$WIFI_INTERFACE" 2>/dev/null | grep -q 'inet '; then return 0; fi
-    sleep 1; i=$((i + 1))
+  # 偶发第一次关联会失败（macOS 节流/扫描未就绪），重试 3 轮
+  for attempt in 1 2 3; do
+    networksetup -setairportnetwork "$WIFI_INTERFACE" "$ssid" "$WIFI_PASSWORD" >/dev/null 2>&1 || true
+    i=0
+    while [ "$i" -lt "$WIFI_JOIN_TIMEOUT" ]; do
+      cur="$(current_ssid || true)"
+      if [ "$cur" = "$ssid" ] && ifconfig "$WIFI_INTERFACE" 2>/dev/null | grep -q 'inet '; then return 0; fi
+      sleep 1; i=$((i + 1))
+    done
+    [ "$attempt" -lt 3 ] && { echo "=> 关联 ${ssid} 失败，重试 ($attempt/3)"; sleep 3; }
   done
   return 1
 }
@@ -167,13 +171,16 @@ do_renew() {
       CODE_SIGN_STYLE=Automatic CODE_SIGNING_ALLOWED=YES -allowProvisioningUpdates \
       DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" >"$build_log" 2>&1; then
     grep -E "error:" "$build_log" 2>/dev/null | tail -3 || true
-    # 最常见的失败是 Xcode 里 Apple ID 掉登录（免费个人团队续签必须有登录态）
-    if grep -q "No Accounts" "$build_log" 2>/dev/null; then
-      notify "$NOTIFY_TITLE 需要重新登录 Xcode" "Xcode 里 Apple ID 已掉登录，请到 Xcode → Settings → Accounts 重新登录后再续签"
-      echo "!! 原因：Xcode 未登录 Apple ID（Settings → Accounts 重新登录）"
+    # 免费个人团队续签靠钥匙串里的账号凭据；失效时会报下面这些关键字。
+    if grep -qE "Invalid credentials|missing Xcode-Username" "$build_log" 2>/dev/null; then
+      notify "$NOTIFY_TITLE 需要重建 Xcode 账号" "钥匙串里的账号凭据失效（missing Xcode-Username）：请在 Xcode → Settings → Accounts 里删除该账号再重新添加（只重登可能无效）"
+      echo "!! 原因：钥匙串账号凭据失效 —— 需在 Xcode 删掉账号再重新添加"
+    elif grep -q "No Accounts" "$build_log" 2>/dev/null; then
+      notify "$NOTIFY_TITLE 需要重建 Xcode 账号" "xcodebuild 读不到账号：请在 Xcode → Settings → Accounts 删除账号后重新添加并登录"
+      echo "!! 原因：xcodebuild 读不到账号（删掉账号再重建）"
     elif grep -q "No profiles for" "$build_log" 2>/dev/null; then
-      notify "$NOTIFY_TITLE 需要重新登录 Xcode" "找不到可用描述文件，通常是 Apple ID 登录态失效；请到 Xcode → Settings → Accounts 检查"
-      echo "!! 原因：没有可用描述文件（多半是账号登录态失效）"
+      notify "$NOTIFY_TITLE 需要重建 Xcode 账号" "找不到可用描述文件，通常是账号凭据失效；请到 Xcode → Settings → Accounts 删除并重新添加账号"
+      echo "!! 原因：没有可用描述文件（多半是账号凭据失效）"
     fi
     echo "!! 构建失败，还原缓存描述文件"; restore_cached_profiles "$bk"; return 1
   fi
