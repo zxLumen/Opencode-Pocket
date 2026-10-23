@@ -16,7 +16,9 @@ permissions:
 
 jobs:
   build-ipa:
-    runs-on: macos-14
+    # XcodeGen 新版本默认生成 objectVersion 77（Xcode 16 工程格式），
+    # macos-14 自带 Xcode 15.4 打不开。固定用带 Xcode 16 的 runner。
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
