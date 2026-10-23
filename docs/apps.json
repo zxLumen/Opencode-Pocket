@@ -14,9 +14,9 @@
       "subtitle": "opencode 手机控制台",
       "localizedDescription": "实时跟进 opencode 所有 session，在手机上完成审批、回答提问、下达指令、切换模型/模式。",
       "iconURL": "https://raw.githubusercontent.com/zxLumen/Opencode-Pocket/main/docs/icon.png",
-      "version": "0.1.0",
-      "versionDate": "2026-10-12",
-      "size": 520000,
+      "version": "0.1.0+18",
+      "versionDate": "2026-10-23",
+      "size": 677319,
       "downloadURL": "https://github.com/zxLumen/Opencode-Pocket/releases/latest/download/OpencodePocket.ipa",
       "minOSVersion": "17.0"
     }
