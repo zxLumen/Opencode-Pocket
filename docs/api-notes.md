@@ -78,8 +78,9 @@ data: {"id":"evt_...","created":1791713944831,"type":"session.reasoning.delta",
 ## 消息分页规则（实测）
 
 `GET /api/session/{sessionID}/message` 的 `cursor` 与 `order` **互斥**：同时传会返回
-`400 InvalidCursorError`。第一页传 `?limit=50&order=desc`，之后翻页只传
-`?limit=25&cursor=<cursor.previous>`（不要带 `order`）。
+`400 InvalidCursorError`。第一页传 `?limit=50&order=desc`，之后翻**更早**的页只传
+`?limit=25&cursor=<cursor.next>`（不要带 `order`）。注意：`cursor.previous` 指向更新的一侧，
+拿它翻历史会得到空页（v2.0.26 实测）。
 
 消息里的 `content[].state.input/output` 可能极大（一次 shell 输出几百 KB，50 条能到
 6MB+），手机端轮询会超时并被系统取消（`NSURLError -999`）。因此 App 走

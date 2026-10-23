@@ -42,7 +42,7 @@ struct MessagesResponse: Decodable {
 /// 调用方必须保留现有消息，绝不能用空数组覆盖缓存。
 struct MessagePage: Sendable {
     var items: [Message]
-    var previous: String?
+    var older: String?
     var ok: Bool
 }
 
@@ -396,7 +396,7 @@ final class PocketStore {
     /// 拉取一页消息（默认最新 N 条，倒序返回），并给出更早一页的 cursor。
     /// 失败或被取消时 `ok == false`，调用方必须保留已有消息/游标。
     func loadMessages(sessionID: String, limit: Int = 25, cursor: String? = nil) async -> MessagePage {
-        guard let c = try? client() else { return MessagePage(items: [], previous: nil, ok: false) }
+        guard let c = try? client() else { return MessagePage(items: [], older: nil, ok: false) }
         var q = [URLQueryItem(name: "limit", value: String(limit))]
         // opencode 规定 cursor 不能和 order 一起传（否则 400 InvalidCursorError）。
         // 第一页用 desc 拿最新 N 条；翻更早的页时只带 cursor。
@@ -408,12 +408,12 @@ final class PocketStore {
         do {
             let r = try await fetchMessages(with: c, sessionID: sessionID, query: q)
             if lastError?.hasPrefix("消息") == true { lastError = nil }
-            return MessagePage(items: r.data, previous: r.cursor?.previous, ok: true)
+            return MessagePage(items: r.data, older: r.cursor?.next, ok: true)
         } catch {
             // 取消是正常生命周期（离开页面 / 切后台），既不报错也不标记离线；
             // 下一轮刷新会重新拉取。
             if Self.isCancellation(error) {
-                return MessagePage(items: [], previous: nil, ok: false)
+                return MessagePage(items: [], older: nil, ok: false)
             }
             markOfflineIfNetwork(error)
             // 解码失败绝不能静默：否则详情页会「卡住不动」，
@@ -425,7 +425,7 @@ final class PocketStore {
                     lastError = "消息加载失败：\(error.localizedDescription)"
                 }
             }
-            return MessagePage(items: [], previous: nil, ok: false)
+            return MessagePage(items: [], older: nil, ok: false)
         }
     }
 

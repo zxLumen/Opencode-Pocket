@@ -422,7 +422,7 @@ struct SessionDetailView: View {
         guard page.ok else { return }   // 失败/被取消：保留缓存，等下一轮刷新
         messages = page.items.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
         if messages.count > windowMax { messages = Array(messages.suffix(windowMax)) }
-        olderCursor = page.previous
+        olderCursor = page.older
         persist()
     }
 
@@ -458,7 +458,7 @@ struct SessionDetailView: View {
         var merged = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
         if bottom, merged.count > windowMax { merged = Array(merged.suffix(windowMax)) }
         if merged != messages { messages = merged; persist() }
-        if olderCursor == nil, let prev = page.previous { olderCursor = prev; persist() }
+        if olderCursor == nil, let prev = page.older { olderCursor = prev; persist() }
         if let q = store.queued[sessionID],
            messages.contains(where: { $0.type == "user" && (($0.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == q) }) {
             store.queued[sessionID] = nil
@@ -479,7 +479,7 @@ struct SessionDetailView: View {
         var merged = byId.values.sorted { ($0.time?.created ?? 0) < ($1.time?.created ?? 0) }
         if merged.count > windowMax { merged = Array(merged.prefix(windowMax)) }
         messages = merged
-        olderCursor = page.previous
+        olderCursor = page.older
         persist()
         if let anchor {
             try? await Task.sleep(nanoseconds: 30_000_000)
