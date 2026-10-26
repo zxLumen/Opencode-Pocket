@@ -24,7 +24,7 @@ if ! xcode_account_present; then
   echo "!! Xcode 账号凭据缺失：请到 Xcode → Settings → Accounts 重新添加 Apple ID"
   exit 2
 fi
-caffeinate -d -w $$ >/dev/null 2>&1 &
+caffeinate -u -d -w $$ >/dev/null 2>&1 &
 
 
 if [ ! -d "$PROJECT" ]; then

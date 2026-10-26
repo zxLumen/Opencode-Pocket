@@ -31,7 +31,7 @@ signing_guard() {
   fi
   # 构建期间保持显示器不睡眠，避免中途锁屏触发 Xcode 删账号。
   if command -v caffeinate >/dev/null 2>&1; then
-    caffeinate -d -w $$ >/dev/null 2>&1 &
+    caffeinate -u -d -w $$ >/dev/null 2>&1 &
   fi
   return 0
 }
