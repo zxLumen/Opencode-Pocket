@@ -14,6 +14,7 @@ struct OpencodePocketApp: App {
                 }
                 .onOpenURL { store.handleDeepLink($0) }
                 .onChange(of: scenePhase) { _, phase in
+                    SceneMarker.write(phase)
                     switch phase {
                     case .active:
                         Task { await store.handleBecameActive() }
@@ -23,6 +24,10 @@ struct OpencodePocketApp: App {
                     default:
                         break
                     }
+                }
+                .task(id: scenePhase) {
+                    guard scenePhase == .active else { return }
+                    await SceneMarker.heartbeat()
                 }
         }
     }

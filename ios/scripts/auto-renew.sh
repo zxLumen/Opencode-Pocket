@@ -14,6 +14,7 @@ BUNDLE_ID="cn.zxlumen.opencodepocket"
 DEVICE_UDID="${DEVICE_UDID:-00008030-000804100CE8802E}"
 DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-T8TG4WAR43}"
 APP=".build/device/Build/Products/Debug-iphoneos/OpencodePocket.app"
+source "$ROOT/scripts/scene-guard.sh"
 APP_PROC_MATCH="OpencodePocket.app"
 NOTIFY_TITLE="口袋opencode"
 
@@ -252,6 +253,13 @@ if [ "$MODE" = "--status" ]; then
   cur_ssid="$(current_ssid || true)"
   if probe_device_retry 3; then dev_reach="可达"; else dev_reach="不可达"; fi
   echo "设备: ${dev_reach}（当前 SSID=${cur_ssid:-未知}）"
+  if [ "$dev_reach" = "可达" ]; then
+    if app_scene_blocking; then
+      echo "App: ${APP_SCENE_REASON} → 会顺延"
+    else
+      echo "App: ${APP_SCENE_REASON:-后台/未运行} → 会续签"
+    fi
+  fi
   [ "$NEED_RENEW" -eq 1 ] && echo "=> 已进入续签窗口（${PROFILE_DAYS_THRESHOLD} 天）" || echo "=> 未进入续签窗口（${PROFILE_DAYS_THRESHOLD} 天）"
   exit 0
 fi
@@ -259,12 +267,16 @@ fi
 
 # ===== 2) 需要续签 =====
 if probe_device_retry 3; then
-  if [ "$SKIP_IF_APP_RUNNING" -eq 1 ] && app_is_running; then
-    echo "当前频段可达，但 App 正在运行，本轮跳过（不安装、手机端零动作）"
-    notify_once appRunningNudgeAt "$NOTIFY_TITLE 暂缓续签" "App 正在运行，为避免打扰已顺延，退出 App 后将自动续签" "$RENEW_NUDGE_GAP"
+  if [ "$SKIP_IF_APP_RUNNING" -eq 1 ] && app_scene_blocking; then
+    echo "当前频段可达，但 App ${APP_SCENE_REASON}，本轮跳过（不安装、手机端零动作）"
+    notify_once appRunningNudgeAt "$NOTIFY_TITLE 暂缓续签" "App ${APP_SCENE_REASON}，为避免打扰已顺延" "$RENEW_NUDGE_GAP"
     exit 0
   fi
-  [ "$SKIP_IF_APP_RUNNING" -eq 0 ] && echo "（描述文件已过期/--force：忽略 App 运行状态，直接续签）"
+  if [ "$SKIP_IF_APP_RUNNING" -eq 1 ]; then
+    echo "App ${APP_SCENE_REASON:-后台/未运行} → 继续续签"
+  else
+    echo "（描述文件已过期/--force：忽略 App 运行状态，直接续签）"
+  fi
   echo "当前频段可达（SSID=$(current_ssid)），直接续签"; do_renew; exit 0
 fi
 
@@ -292,11 +304,15 @@ write_state lastSwitchAttemptAt "$NOW"; RESTORE_ON_EXIT=1
 if wifi_join "$ALT_SSID"; then
   echo "已切到 $ALT_SSID"
   if probe_device_retry 8; then
-    if [ "$SKIP_IF_APP_RUNNING" -eq 1 ] && app_is_running; then
-      echo "已切到 ${ALT_SSID}，但 App 正在运行，本轮跳过（立即切回）"
-      notify_once appRunningNudgeAt "$NOTIFY_TITLE 暂缓续签" "App 正在运行，为避免打扰已顺延，退出 App 后将自动续签" "$RENEW_NUDGE_GAP"
+    if [ "$SKIP_IF_APP_RUNNING" -eq 1 ] && app_scene_blocking; then
+      echo "已切到 ${ALT_SSID}，但 App ${APP_SCENE_REASON}，本轮跳过（立即切回）"
+      notify_once appRunningNudgeAt "$NOTIFY_TITLE 暂缓续签" "App ${APP_SCENE_REASON}，为避免打扰已顺延" "$RENEW_NUDGE_GAP"
     else
-      [ "$SKIP_IF_APP_RUNNING" -eq 0 ] && echo "（描述文件已过期/--force：忽略 App 运行状态，直接续签）"
+      if [ "$SKIP_IF_APP_RUNNING" -eq 1 ]; then
+        echo "已切到 ${ALT_SSID}，App ${APP_SCENE_REASON:-后台/未运行} → 继续续签"
+      else
+        echo "（描述文件已过期/--force：忽略 App 运行状态，直接续签）"
+      fi
       do_renew
     fi
   else
