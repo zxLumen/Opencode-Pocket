@@ -14,6 +14,19 @@ DEVICE_UDID="${DEVICE_UDID:-00008030-000804100CE8802E}"
 DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-T8TG4WAR43}"
 APP=".build/device/Build/Products/Debug-iphoneos/OpencodePocket.app"
 
+source "$ROOT/scripts/scene-guard.sh"
+
+if screen_is_locked; then
+  echo "!! Mac 锁屏中：先解锁再构建，否则 Xcode 会删除 Apple ID"
+  exit 2
+fi
+if ! xcode_account_present; then
+  echo "!! Xcode 账号凭据缺失：请到 Xcode → Settings → Accounts 重新添加 Apple ID"
+  exit 2
+fi
+caffeinate -d -w $$ >/dev/null 2>&1 &
+
+
 if [ ! -d "$PROJECT" ]; then
   echo "==> 生成 Xcode 工程"
   command -v xcodegen >/dev/null || { echo "需要 xcodegen"; exit 1; }

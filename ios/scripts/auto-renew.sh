@@ -163,6 +163,11 @@ restore_cached_profiles() {
   done < <(profile_cache_dirs)
 }
 do_renew() {
+  if ! signing_guard; then
+    echo "!! ${SIGNING_GUARD_REASON}，跳过续签（不删除旧 profile）"
+    notify_once signingGuardAt "$NOTIFY_TITLE 续签暂停" "${SIGNING_GUARD_REASON}，本轮不删除旧 profile；修复后自动重试" "$RENEW_NUDGE_GAP"
+    return 1
+  fi
   local bk="$ROOT/.build/profile-backup" new_exp now build_log
   rm -rf "$bk"; mkdir -p "$bk"; purge_cached_profiles "$bk"
   echo "==> 续签并重装真机版"
@@ -264,6 +269,13 @@ if [ "$MODE" = "--status" ]; then
   exit 0
 fi
 [ "$NEED_RENEW" -eq 0 ] && { echo "=> 未进入 ${PROFILE_DAYS_THRESHOLD} 天窗口，无需动作"; exit 0; }
+
+# Mac 锁屏时签名构建会让 Xcode 删除 Apple ID，直接跳过，解锁后自动重试。
+if screen_is_locked; then
+  echo "Mac 锁屏中，跳过本轮续签（避免 Xcode 删除 Apple ID）"
+  notify_once lockSkipAt "$NOTIFY_TITLE 续签暂停" "Mac 锁屏，已跳过；解锁后会自动重试" "$RENEW_NUDGE_GAP"
+  exit 0
+fi
 
 # ===== 2) 需要续签 =====
 if probe_device_retry 3; then

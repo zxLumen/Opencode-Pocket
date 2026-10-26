@@ -3,6 +3,39 @@
 # app_scene_blocking: 返回 0 = 应顺延（前台/未知），1 = 可以续签（后台/未运行/锁屏）。
 # 结果说明放在全局 APP_SCENE_REASON。
 
+
+# ---------------------------------------------------------------------------
+# 签名保护：Mac 锁屏时 Xcode 读不到 data-protection keychain，
+# 会把 Apple ID 当成损坏并删除。签名构建前必须检查锁屏与账号凭据。
+# ---------------------------------------------------------------------------
+
+screen_is_locked() {
+  ioreg -n Root -d1 2>/dev/null | grep -q '"CGSSessionScreenIsLocked"=Yes'
+}
+
+xcode_account_present() {
+  security find-generic-password -s "Xcode-Username" >/dev/null 2>&1 ||   security find-generic-password -s "com.apple.dt.Xcode" >/dev/null 2>&1
+}
+
+# 返回 0 = 可以安全签名（并已启动 caffeinate）；1 = 应跳过。
+# 原因放在 SIGNING_GUARD_REASON。
+signing_guard() {
+  SIGNING_GUARD_REASON=""
+  if screen_is_locked; then
+    SIGNING_GUARD_REASON="Mac 锁屏"
+    return 1
+  fi
+  if ! xcode_account_present; then
+    SIGNING_GUARD_REASON="Xcode 账号凭据缺失"
+    return 1
+  fi
+  # 构建期间保持显示器不睡眠，避免中途锁屏触发 Xcode 删账号。
+  if command -v caffeinate >/dev/null 2>&1; then
+    caffeinate -d -w $$ >/dev/null 2>&1 &
+  fi
+  return 0
+}
+
 scene_app_running() {
   local out
   out="$(xcrun devicectl device info processes --device "$DEVICE_UDID" -t 10 2>/dev/null || true)"
