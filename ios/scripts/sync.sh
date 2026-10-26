@@ -20,10 +20,6 @@ if screen_is_locked; then
   echo "!! Mac 锁屏中：先解锁再构建，否则 Xcode 会删除 Apple ID"
   exit 2
 fi
-if ! xcode_account_present; then
-  echo "!! Xcode 账号凭据缺失：请到 Xcode → Settings → Accounts 重新添加 Apple ID"
-  exit 2
-fi
 caffeinate -u -d -w $$ >/dev/null 2>&1 &
 
 

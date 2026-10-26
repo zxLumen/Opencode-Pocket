@@ -13,9 +13,6 @@ screen_is_locked() {
   ioreg -n Root -d1 2>/dev/null | grep -q '"CGSSessionScreenIsLocked"=Yes'
 }
 
-xcode_account_present() {
-  security find-generic-password -s "Xcode-Username" >/dev/null 2>&1 ||   security find-generic-password -s "com.apple.dt.Xcode" >/dev/null 2>&1
-}
 
 # 返回 0 = 可以安全签名（并已启动 caffeinate）；1 = 应跳过。
 # 原因放在 SIGNING_GUARD_REASON。
@@ -23,10 +20,6 @@ signing_guard() {
   SIGNING_GUARD_REASON=""
   if screen_is_locked; then
     SIGNING_GUARD_REASON="Mac 锁屏"
-    return 1
-  fi
-  if ! xcode_account_present; then
-    SIGNING_GUARD_REASON="Xcode 账号凭据缺失"
     return 1
   fi
   # 构建期间保持显示器不睡眠，避免中途锁屏触发 Xcode 删账号。

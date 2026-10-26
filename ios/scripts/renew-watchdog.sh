@@ -152,13 +152,5 @@ log "===== watchdog 开始（${MODE}）====="
 check_app "cn.zxlumen.opencodepocket.autorenew" "$POCKET_IOS"            "cn.zxlumen.opencodepocket" "口袋opencode"
 check_app "com.liuzixiang.yijing64.autorenew"   "$PROJECTS_ROOT/yijing64" "com.liuzixiang.Yijing64"   "易经64"
 
-# Xcode 账号凭据：锁屏时跑 -allowProvisioningUpdates 会被 Xcode 删除，
-# 提前发现，避免等到 profile 快过期才发现。
-if ! security find-generic-password -s "Xcode-Username" >/dev/null 2>&1 && \
-   ! security find-generic-password -s "com.apple.dt.Xcode" >/dev/null 2>&1; then
-  alert_once "xcodeAccountMissing" "Xcode 账号凭据丢失" \
-    "续签会失败：请在 Xcode → Settings → Accounts 重新添加 Apple ID（通常是锁屏时跑了签名构建）"
-fi
-
 log "===== watchdog 结束 ====="
 exit 0
