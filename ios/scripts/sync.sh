@@ -4,6 +4,11 @@
 #       请让 Mac 与 iPhone 处于不同频段（通常 Mac 连 2.4G / iPhone 连 5G）。
 set -euo pipefail
 
+NO_LAUNCH=0
+for arg in "$@"; do
+  [ "$arg" = "--no-launch" ] && NO_LAUNCH=1
+done
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
@@ -35,8 +40,13 @@ xcodebuild -project "$PROJECT" -scheme "$SCHEME" \
   CODE_SIGN_STYLE=Automatic CODE_SIGNING_ALLOWED=YES -allowProvisioningUpdates \
   DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM"
 
-echo "==> 真机安装并启动"
+echo "==> 真机安装"
 xcrun devicectl device install app --device "$DEVICE_UDID" "$APP"
+if [ "$NO_LAUNCH" = "1" ]; then
+  echo "==> 已安装（--no-launch，未启动 App）"
+  exit 0
+fi
+echo "==> 启动 App"
 xcrun devicectl device process terminate --device "$DEVICE_UDID" "$BUNDLE_ID" 2>/dev/null || true
 xcrun devicectl device process launch --device "$DEVICE_UDID" "$BUNDLE_ID"
 

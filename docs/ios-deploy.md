@@ -18,6 +18,7 @@
 ```bash
 cd ios
 bash scripts/sync.sh     # 构建 → devicectl 安装 → 启动
+bash scripts/sync.sh --no-launch   # 只安装，不自动打开 App
 ```
 
 ⚠️ **手机必须对 Mac 可达**。家用光猫（SG659HZ）会隔离**同频段**客户端：
