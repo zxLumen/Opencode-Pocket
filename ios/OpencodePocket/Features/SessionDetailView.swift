@@ -4,7 +4,10 @@ import UIKit
 private let bottomID = "bottom"
 
 private struct TopYKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
+    // 用 greatestFiniteMagnitude 表示「哨兵不在树里（未知）」。
+    // 若用 0，LazyVStack 回收顶部哨兵后会回落到 0，看起来像"你在最顶部"，
+    // 会持续误触发「上拉加载更早」，把最新消息挤出窗口（历史 bug）。
+    static var defaultValue: CGFloat = .greatestFiniteMagnitude
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 private struct ContentHKey: PreferenceKey {
@@ -92,9 +95,10 @@ struct SessionDetailView: View {
         // 底部哨兵被 LazyVStack 回收时拿不到值 → 说明离底部很远
         guard frames.bottomMinY < .greatestFiniteMagnitude else { return false }
         let sentinelSaysBottom = frames.bottomMinY <= frames.viewportHeight + 120
-        // 粗筛：只看"是否明显离底部很远"，防止哨兵值变陈旧而误判
+        // 粗筛：只看"是否明显离底部很远"，防止哨兵值变陈旧而误判。
+        // 顶部哨兵不在（∞）时跳过这一项——不能因为"量不到"就否决贴底。
         var offsetSaysNotFar = true
-        if frames.contentHeight > 0 {
+        if frames.topMinY < .greatestFiniteMagnitude, frames.contentHeight > 0 {
             let maxScroll = max(frames.contentHeight - frames.viewportHeight, 0)
             offsetSaysNotFar = (maxScroll - max(-frames.topMinY, 0)) <= 200
         }
@@ -128,7 +132,13 @@ struct SessionDetailView: View {
                         pullEvaluate()
                     }
                     .onPreferenceChange(TopYKey.self) { minY in
-                        if didInitialScroll, minY > -60, olderCursor?.isEmpty == false, !loadingOlder {
+                        // 只有哨兵确实在树里（有限值）且贴近顶部，才加载更早；
+                        // LazyVStack 回收哨兵时值为默认的 ∞，绝不能触发。
+                        if didInitialScroll,
+                           minY < .greatestFiniteMagnitude,
+                           minY > -60,
+                           olderCursor?.isEmpty == false,
+                           !loadingOlder {
                             Task { await loadOlder(proxy) }
                         }
                     }
