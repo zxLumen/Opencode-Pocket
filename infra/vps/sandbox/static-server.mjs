@@ -473,6 +473,30 @@ function proxyToApp(req, res, path, search) {
 // 同源抓取代理:页面里 fetch("__fetch?url=<encodeURIComponent(目标)>") → 服务端抓取,绕开浏览器 CORS。
 // 安全护栏:只允许公网 http(s)(禁止本机/内网/云元数据,防 SSRF 打到 opencode 自身)、超时 12s、最大 3MB、并发上限。
 let pfInflight = 0;
+const PF_TIMEOUT_MS = 12000;
+const PF_RETRY_DELAY_MS = 400;
+const PF_CACHE_TTL_MS = 60 * 1000;
+const PF_CACHE_MAX_ENTRIES = 200;
+const PF_CACHE_MAX_BYTES = 3 * 1024 * 1024;
+// 进程内 LRU:key=完整目标 URL。过期条目保留(不主动删),上游持续失败时用来兜底。
+const pfCache = new Map();
+function pfCacheTouch(key) {
+  const e = pfCache.get(key);
+  if (!e) return null;
+  pfCache.delete(key); // 重新插入到队尾 = 最近使用
+  pfCache.set(key, e);
+  return e;
+}
+function pfCacheStore(key, entry) {
+  if (entry.body.length > PF_CACHE_MAX_BYTES) return;
+  pfCache.delete(key);
+  pfCache.set(key, entry);
+  while (pfCache.size > PF_CACHE_MAX_ENTRIES) pfCache.delete(pfCache.keys().next().value);
+}
+function pfSendCached(res, entry, extra = {}) {
+  res.writeHead(entry.status, { ...baseHeaders, "Content-Type": entry.contentType, "Cache-Control": "public, max-age=60", ...extra });
+  res.end(entry.body);
+}
 function isPrivateIp(ip) {
   const s = String(ip || "");
   if (s === "::1" || s.startsWith("fc") || s.startsWith("fd") || s.startsWith("fe80")) return true;
@@ -492,20 +516,62 @@ async function handlePreviewFetch(req, res, url) {
   catch { return send(res, 502, "dns failed", { "Content-Type": "text/plain; charset=utf-8" }); }
   if (pfInflight >= 8) return send(res, 429, "too many requests", { "Content-Type": "text/plain; charset=utf-8" });
   pfInflight++;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => { try { ctrl.abort(); } catch {} }, 12000);
+  const startedAt = Date.now();
+  const key = u.href;
   try {
-    const r = await fetch(u, {
-      redirect: "follow", signal: ctrl.signal,
-      headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "accept-language": "zh-CN,zh;q=0.9", accept: req.headers.accept || "*/*" },
-    });
-    const buf = Buffer.from(await r.arrayBuffer());
-    if (buf.length > 3 * 1024 * 1024) return send(res, 413, "too large", { "Content-Type": "text/plain; charset=utf-8" });
-    res.writeHead(r.status, { ...baseHeaders, "Content-Type": r.headers.get("content-type") || "application/octet-stream", "Cache-Control": "public, max-age=60" });
-    res.end(buf);
-  } catch (e) {
-    return send(res, 502, "fetch failed: " + ((e && e.message) || e), { "Content-Type": "text/plain; charset=utf-8" });
-  } finally { clearTimeout(timer); pfInflight--; }
+    // ① 新鲜缓存:60s 内直接返回,不打上游。
+    const hit = pfCacheTouch(key);
+    if (hit && Date.now() - hit.storedAt <= PF_CACHE_TTL_MS) {
+      console.log(`[preview-fetch] cache hit host=${host} ageMs=${Date.now() - hit.storedAt}`);
+      return pfSendCached(res, hit);
+    }
+
+    // ② 网络异常 / 上游 5xx 重试 1 次(间隔 400ms),两次共用 12s 总超时。
+    const deadline = startedAt + PF_TIMEOUT_MS;
+    let finalStatus = 502;
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (attempt > 0) {
+        const wait = Math.min(PF_RETRY_DELAY_MS, deadline - Date.now());
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) { lastErr = lastErr || new Error("timeout"); break; }
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => { try { ctrl.abort(); } catch {} }, remaining);
+      try {
+        const r = await fetch(u, {
+          redirect: "follow", signal: ctrl.signal,
+          headers: { "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", "accept-language": "zh-CN,zh;q=0.9", accept: req.headers.accept || "*/*" },
+        });
+        finalStatus = r.status;
+        if (r.status >= 500) { // 上游 5xx:丢弃响应体,进入重试
+          try { await r.body?.cancel(); } catch {}
+          lastErr = new Error("upstream " + r.status);
+          continue;
+        }
+        const buf = Buffer.from(await r.arrayBuffer());
+        if (buf.length > PF_CACHE_MAX_BYTES) return send(res, 413, "too large", { "Content-Type": "text/plain; charset=utf-8" });
+        const contentType = r.headers.get("content-type") || "application/octet-stream";
+        pfCacheStore(key, { status: r.status, contentType, body: buf, storedAt: Date.now() });
+        res.writeHead(r.status, { ...baseHeaders, "Content-Type": contentType, "Cache-Control": "public, max-age=60" });
+        res.end(buf);
+        return;
+      } catch (e) {
+        lastErr = e;
+        finalStatus = 502;
+      } finally { clearTimeout(timer); }
+    }
+
+    // ③ 重试仍失败:过期缓存兜底(原 content-type + X-Preview-Stale)。
+    const stale = pfCacheTouch(key);
+    if (stale && Date.now() - stale.storedAt > PF_CACHE_TTL_MS) {
+      console.log(`[preview-fetch] stale host=${host} ms=${Date.now() - startedAt} status=${stale.status} ageMs=${Date.now() - stale.storedAt}`);
+      return pfSendCached(res, stale, { "X-Preview-Stale": "1" });
+    }
+    console.log(`[preview-fetch] fail host=${host} ms=${Date.now() - startedAt} status=502 upstream=${finalStatus} err=${(lastErr && lastErr.message) || lastErr}`);
+    return send(res, 502, "fetch failed: " + ((lastErr && lastErr.message) || lastErr), { "Content-Type": "text/plain; charset=utf-8" });
+  } finally { pfInflight--; }
 }
 async function servePreview(req, res, pathname, search) {
   const isRead = req.method === "GET" || req.method === "HEAD";
