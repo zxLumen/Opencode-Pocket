@@ -18,7 +18,7 @@
 # **不包含**它们(只 COPY dist);CI 用 `app-maps` 阶段把它们导出为 artifact 留档。
 
 # ============ 构建阶段:裁剪版 Web UI ============
-FROM oven/bun:1 AS app-build
+FROM oven/bun:1.4.3 AS app-build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
