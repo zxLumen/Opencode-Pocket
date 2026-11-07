@@ -19,6 +19,13 @@ function configService() {
   return readJson(path.join(os.homedir(), '.config', 'opencode', 'service.json'));
 }
 
+/** 逗号分隔的列表；`-` 表示显式禁用（返回空数组）。 */
+function list(value, fallback) {
+  const raw = value === undefined || value === '' ? fallback : value;
+  if (raw === '-') return [];
+  return String(raw).split(',').map((s) => s.trim()).filter(Boolean);
+}
+
 const state = stateService() || {};
 const cfgService = configService() || {};
 
@@ -42,6 +49,13 @@ export const config = {
   feishu: {
     webhook: env.FEISHU_WEBHOOK || '',
     secret: env.FEISHU_SECRET || '',
+  },
+  notify: {
+    // 命中前缀 → 整条不推。默认只静音 CEO 自己的会话（[ceo] 邮件/复盘/对话）。
+    mutePrefixes: list(env.NOTIFY_MUTE_PREFIXES, '[ceo]'),
+    // 命中前缀 → 只静音 quietKinds 里的类型。cockpit 派发的会话标题都带 [节点] 前缀。
+    quietPrefixes: list(env.NOTIFY_QUIET_PREFIXES, '['),
+    quietKinds: list(env.NOTIFY_QUIET_KINDS, 'done,running'),
   },
 };
 

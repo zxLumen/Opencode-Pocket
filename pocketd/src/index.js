@@ -3,6 +3,7 @@ import { log } from './logger.js';
 import { makeClient } from './opencode.js';
 import { SessionCache } from './sessions.js';
 import { evaluate } from './rules.js';
+import { muteReason } from './filters.js';
 import { buildChannels } from './channels/index.js';
 import { startServer } from './server.js';
 
@@ -83,6 +84,12 @@ async function main() {
       n.directory = info.directory;
     }
     if (n.sessionID) n.click = `${config.appScheme}://session/${n.sessionID}`;
+
+    const muted = muteReason(n);
+    if (muted) {
+      log.info(`skip notification: ${muted} — ${n.title || ''}`);
+      return;
+    }
 
     for (const ch of channels) {
       try {

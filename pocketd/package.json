@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node --env-file-if-exists=.env src/index.js",
-    "dev": "node --watch --env-file-if-exists=.env src/index.js"
+    "dev": "node --watch --env-file-if-exists=.env src/index.js",
+    "test": "node --test test/"
   }
 }
