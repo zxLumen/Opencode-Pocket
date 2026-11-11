@@ -1,3 +1,7 @@
+© 2026 刘子祥 · 原创作品，转载请注明出处
+
+> **定位**：OpenCode 的 iOS 优先移动控制台：跟进 session、审批、回答提问、切换模型。 使用许可见 [LICENSE](./LICENSE)。
+
 # Opencode-Pocket
 
 iOS 优先的移动端控制台：实时跟进本机 opencode 的所有 session，并在手机上完成审批、回答提问、下达指令、切换模型/模式。
