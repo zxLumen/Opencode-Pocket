@@ -1,0 +1,393 @@
+diff --git a/packages/app/src/composer/editor/editor.tsx b/packages/app/src/composer/editor/editor.tsx
+index defbf666d0..4a70b1d156 100644
+--- a/packages/app/src/composer/editor/editor.tsx
++++ b/packages/app/src/composer/editor/editor.tsx
+@@ -45,6 +45,8 @@ import type {
+ } from "../types"
+ import type { ComposerEditorModel, ComposerSelectControl } from "./interaction"
+ import { isAttachment } from "../prompt-parts"
++import { createVoiceInput } from "../voice"
++import { showToast } from "@/shell/notifications/toast"
+ import "../attachments/attachments.css"
+ import "./editor.css"
+ 
+@@ -118,6 +120,22 @@ export function ComposerEditor(props: ComposerEditorProps) {
+   })
+   let localInput = false
+ 
++  // 中文输入法：Safari 在「回车选词」时会先 compositionend 再派发 keydown，
++  // 只靠 event.isComposing 会把选词的那一下当成发送。这里额外用时间窗兜底。
++  let composing = false
++  let compositionEndedAt = 0
++
++  const voice = createVoiceInput({
++    authHeader: () => props.controller.view.voice?.authHeader?.(),
++    onError: (message) => showToast({ variant: "error", title: "语音输入", description: message }),
++    onTranscript: (text) => {
++      // 录音转文字后直接发送；文本输入框保留，两种输入并存。
++      props.controller.onInput(text, [{ type: "text", content: text, start: 0, end: text.length }], text.length)
++      props.controller.submit()
++    },
++  })
++
++
+   const updateCursor = () => {
+     if (!editor || !window.getSelection()?.isCollapsed) return
+     props.controller.onCursor(composerCursor(editor))
+@@ -239,6 +257,7 @@ export function ComposerEditor(props: ComposerEditorProps) {
+             autocapitalize={state.mode === "normal" ? "sentences" : "off"}
+             autocorrect={state.mode === "normal" ? "on" : "off"}
+             spellcheck={state.mode === "normal"}
++            enterkeyhint={state.mode === "normal" ? "send" : "enter"}
+             // @ts-expect-error
+             autocomplete="off"
+             class="relative z-10 block min-h-[60px] w-full whitespace-pre-wrap bg-transparent px-4 pt-4 pb-2 text-[13px] font-[440] leading-5 text-v2-text-text-base focus:outline-none [&_[data-mention=file]]:text-syntax-property [&_[data-mention=agent]]:text-syntax-type [&_[data-mention=reference]]:text-syntax-keyword"
+@@ -254,6 +273,13 @@ export function ComposerEditor(props: ComposerEditorProps) {
+               localInput = true
+               props.controller.onInput(prompt.map((part) => part.content).join(""), [...prompt, ...attachments], cursor)
+             }}
++            onCompositionStart={() => {
++              composing = true
++            }}
++            onCompositionEnd={() => {
++              composing = false
++              compositionEndedAt = Date.now()
++            }}
+             onKeyDown={(event) => {
+               if (!view.draftOnly && props.controller.onKeyDown(event)) return
+               const mod = event.metaKey || event.ctrlKey
+@@ -264,7 +290,11 @@ export function ComposerEditor(props: ComposerEditorProps) {
+                 return
+               }
+ 
+-              if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
++              if (event.key === "Enter" && !event.shiftKey) {
++                // 输入法正在组词，或这一步是「回车选词」，都不能发送消息。
++                if (composing || event.isComposing || event.keyCode === 229) return
++                if (Date.now() - compositionEndedAt < 50) return
++
+                 event.preventDefault()
+ 
+                 if (event.repeat) return
+@@ -309,6 +339,22 @@ export function ComposerEditor(props: ComposerEditorProps) {
+           </Show>
+         </ScrollView>
+ 
++        <Show when={voice.status() !== "idle"}>
++          <div
++            data-component="composer-voice-status"
++            class="flex items-center gap-2 px-4 pb-1 text-[12px] text-zinc-500"
++          >
++            <span
++              class="inline-block size-1.5 rounded-full"
++              classList={{
++                "animate-pulse bg-red-500": voice.status() === "recording",
++                "animate-pulse bg-sky-500": voice.status() === "transcribing",
++              }}
++            />
++            <span>{voice.status() === "recording" ? "正在聆听…再说一次点麦克风结束并发送" : "正在识别…"}</span>
++          </div>
++        </Show>
++
+         <div class="flex h-11 items-center px-2">
+           <div
+             class="flex shrink-0 items-center"
+@@ -395,6 +441,13 @@ export function ComposerEditor(props: ComposerEditorProps) {
+                 </span>
+               </Button>
+             </Show>
++            <Show when={state.mode === "normal" && !props.readOnly && !props.disabled}>
++              <ComposerVoiceButton
++                recording={voice.status() === "recording"}
++                busy={voice.status() === "transcribing"}
++                onClick={() => voice.toggle()}
++              />
++            </Show>
+             <ComposerEditorSubmitButton
+               mode={state.mode}
+               stopping={view.submit.stopping()}
+@@ -1123,6 +1176,52 @@ function ComposerEditorAlternateDelivery(props: { controller: ComposerEditorMode
+   )
+ }
+ 
++export function ComposerVoiceButton(props: { recording: boolean; busy: boolean; onClick: () => void }) {
++  return (
++    <Tooltip
++      placement="top"
++      value={props.recording ? "结束录音并发送" : props.busy ? "正在识别…" : "语音输入（说完自动发送）"}
++    >
++      <IconButton
++        data-action="composer-voice"
++        type="button"
++        disabled={props.busy}
++        size="small"
++        variant="ghost"
++        class="me-1 size-7 rounded-md p-[6px]"
++        classList={{ "text-red-500": props.recording }}
++        aria-label={props.recording ? "结束录音并发送" : "语音输入"}
++        aria-pressed={props.recording}
++        onClick={(event) => {
++          event.preventDefault()
++          event.stopPropagation()
++          props.onClick()
++        }}
++        icon={
++          <svg viewBox="0 0 24 24" fill="none" class="size-4" aria-hidden="true">
++            <rect
++              x="9"
++              y="3"
++              width="6"
++              height="11"
++              rx="3"
++              stroke="currentColor"
++              stroke-width="1.6"
++              fill={props.recording ? "currentColor" : "none"}
++            />
++            <path
++              d="M5.5 11.5v.5a6.5 6.5 0 0 0 13 0v-.5M12 18.5V21"
++              stroke="currentColor"
++              stroke-width="1.6"
++              stroke-linecap="round"
++            />
++          </svg>
++        }
++      />
++    </Tooltip>
++  )
++}
++
+ export function ComposerEditorSubmitButton(props: {
+   mode: ComposerMode
+   stopping: boolean
+diff --git a/packages/app/src/composer/editor/interaction.ts b/packages/app/src/composer/editor/interaction.ts
+index bde7d860d5..a13d4668ff 100644
+--- a/packages/app/src/composer/editor/interaction.ts
++++ b/packages/app/src/composer/editor/interaction.ts
+@@ -46,6 +46,10 @@ export type ComposerEditorView = {
+     onSubmit: (options?: { alternate?: boolean }) => void
+     onStop: () => void
+   }
++  voice?: {
++    /** 当前服务器的 Basic 凭证；语音转写走 /pocketd/asr，需要和 opencode API 同一套认证。 */
++    authHeader?: () => string | undefined
++  }
+   shell?: {
+     onOpen: () => void
+     onClose: () => void
+diff --git a/packages/app/src/composer/model.ts b/packages/app/src/composer/model.ts
+index e19b4a7d62..5ac525d575 100644
+--- a/packages/app/src/composer/model.ts
++++ b/packages/app/src/composer/model.ts
+@@ -16,6 +16,7 @@ import { usePlatform } from "@/runtime/platform/platform"
+ import { useWorkspaceLocation } from "@/workspaces/location"
+ import { resolveBlobUrl } from "@/runtime/persistence/drafts"
+ import { useData, useServer } from "@/runtime/server/current"
++import { authTokenFromCredentials } from "@/runtime/server/api"
+ import { showToast } from "@/shell/notifications/toast"
+ import { formatServerError } from "@/runtime/server/errors"
+ import { Skill } from "@opencode/schema/skill"
+@@ -388,6 +389,12 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
+     },
+     view: {
+       placeholder,
++      voice: {
++        authHeader: () => {
++          const password = server.conn.type === "http" ? server.conn.http.password : undefined
++          return password ? `Basic ${authTokenFromCredentials({ password })}` : undefined
++        },
++      },
+       get agent() {
+         const agents = adapter.controls().agents
+ 
+diff --git a/packages/app/src/composer/voice.ts b/packages/app/src/composer/voice.ts
+new file mode 100644
+index 0000000000..6b5e2eafdd
+--- /dev/null
++++ b/packages/app/src/composer/voice.ts
+@@ -0,0 +1,172 @@
++import { createSignal, onCleanup } from "solid-js"
++
++export type VoiceStatus = "idle" | "recording" | "transcribing"
++
++/** 单次录音上限。服务端也限制 60 秒，超长会被拒。 */
++const MAX_RECORDING_MS = 60_000
++
++/** 太小或全是静音的录音没必要上传。 */
++const MIN_AUDIO_BYTES = 1_200
++
++const MIME_CANDIDATES = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"]
++
++function pickMimeType() {
++  if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") return undefined
++
++  return MIME_CANDIDATES.find((type) => MediaRecorder.isTypeSupported(type))
++}
++
++function permissionMessage(error: unknown) {
++  const name = error instanceof DOMException ? error.name : ""
++  if (name === "NotAllowedError" || name === "SecurityError") return "麦克风权限被拒绝，请在浏览器设置里允许后重试"
++  if (name === "NotFoundError") return "没有找到麦克风"
++  if (name === "NotReadableError") return "麦克风被其它应用占用"
++  return error instanceof Error ? error.message : "无法打开麦克风"
++}
++
++/**
++ * 浏览器语音输入：录音 → 上传到 /pocketd/asr 转写 → 回调文本。
++ *
++ * 和文本输入并存：按钮只负责「按住/点按说话」，识别完成后由调用方决定是填入还是直接发送。
++ */
++export function createVoiceInput(options: {
++  onTranscript: (text: string) => void
++  onError: (message: string) => void
++  authHeader?: () => string | undefined
++}) {
++  const [status, setStatus] = createSignal<VoiceStatus>("idle")
++  let recorder: MediaRecorder | undefined
++  let stream: MediaStream | undefined
++  let chunks: Blob[] = []
++  let timer: ReturnType<typeof setTimeout> | undefined
++  let cancelled = false
++  let disposed = false
++
++  const supported = () =>
++    typeof navigator !== "undefined" &&
++    typeof navigator.mediaDevices?.getUserMedia === "function" &&
++    typeof MediaRecorder !== "undefined"
++
++  const release = () => {
++    if (timer) clearTimeout(timer)
++    timer = undefined
++    stream?.getTracks().forEach((track) => track.stop())
++    stream = undefined
++  }
++
++  const stop = () => {
++    if (timer) clearTimeout(timer)
++    timer = undefined
++    if (recorder && recorder.state !== "inactive") {
++      setStatus("transcribing")
++      recorder.stop()
++    }
++  }
++
++  const cancel = () => {
++    cancelled = true
++    if (timer) clearTimeout(timer)
++    timer = undefined
++    if (recorder && recorder.state !== "inactive") recorder.stop()
++    else {
++      release()
++      setStatus("idle")
++    }
++  }
++
++  async function transcribe(blob: Blob) {
++    if (blob.size < MIN_AUDIO_BYTES) {
++      setStatus("idle")
++      options.onError("录音太短了，点麦克风说一句再点一次结束")
++      return
++    }
++
++    setStatus("transcribing")
++    try {
++      const headers: Record<string, string> = { "content-type": blob.type || "audio/webm" }
++      const auth = options.authHeader?.()
++      if (auth) headers.authorization = auth
++
++      const response = await fetch("/pocketd/asr", { method: "POST", headers, body: blob })
++      const data = (await response.json().catch(() => ({}))) as { text?: string; error?: string }
++      if (response.status === 401) throw new Error("登录状态已失效，刷新页面重新连接服务器后再试")
++      if (!response.ok) throw new Error(data.error || `语音识别失败（HTTP ${response.status}）`)
++
++      const text = String(data.text || "").trim()
++      if (!text) {
++        options.onError("没听清，再说一次？")
++        return
++      }
++      if (!disposed) options.onTranscript(text)
++    } catch (error) {
++      options.onError(error instanceof Error ? error.message : "语音识别失败")
++    } finally {
++      if (!disposed) setStatus("idle")
++    }
++  }
++
++  async function start() {
++    if (status() !== "idle") return
++    if (!supported()) {
++      options.onError("当前浏览器不支持录音，请用 Safari / Chrome 打开，并确认是 HTTPS")
++      return
++    }
++
++    cancelled = false
++    try {
++      stream = await navigator.mediaDevices.getUserMedia({
++        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
++      })
++    } catch (error) {
++      options.onError(permissionMessage(error))
++      return
++    }
++
++    const mimeType = pickMimeType()
++    try {
++      recorder = new MediaRecorder(stream, mimeType ? { mimeType, audioBitsPerSecond: 64_000 } : undefined)
++    } catch {
++      release()
++      options.onError("录音初始化失败，请重试")
++      return
++    }
++
++    chunks = []
++    recorder.ondataavailable = (event) => {
++      if (event.data.size > 0) chunks.push(event.data)
++    }
++    recorder.onstop = () => {
++      const type = recorder?.mimeType || chunks[0]?.type || "audio/webm"
++      const blob = new Blob(chunks, { type })
++      chunks = []
++      recorder = undefined
++      release()
++      if (cancelled) {
++        setStatus("idle")
++        return
++      }
++      void transcribe(blob)
++    }
++    recorder.onerror = () => {
++      release()
++      setStatus("idle")
++      options.onError("录音失败，请重试")
++    }
++
++    recorder.start(250)
++    setStatus("recording")
++    timer = setTimeout(stop, MAX_RECORDING_MS)
++  }
++
++  const toggle = () => {
++    if (status() === "recording") stop()
++    else if (status() === "idle") void start()
++  }
++
++  onCleanup(() => {
++    disposed = true
++    cancel()
++  })
++
++  return { status, supported, start, stop, cancel, toggle }
++}
+diff --git a/packages/client/src/solid/connection.ts b/packages/client/src/solid/connection.ts
+index 01e6b75b28..4c7bacbb0f 100644
+--- a/packages/client/src/solid/connection.ts
++++ b/packages/client/src/solid/connection.ts
+@@ -29,7 +29,8 @@ export type ClientConnectionOptions = {
+   }
+ }
+ 
+-const connectTimeout = 2_000
++// 线上补丁：跨公网/反向代理首次建立事件流经常超过 2s，改成 8s 避免反复重连。
++const connectTimeout = 8_000
+ const reconnectDelay = 1_000
+ const connectionHistoryLimit = 50
+ export const defaultIdleTimeout = 45_000

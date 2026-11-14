@@ -6,7 +6,8 @@
 ## 改了什么
 
 源码在 opencode 仓库（本地工作副本 `~/Projects/opencode-pocket-wt`，分支
-`feat/webui-voice-input`）：
+`feat/webui-voice-input`）。补丁原件见 [`pocket-webui.patch`](./pocket-webui.patch)，
+可直接 `git apply` 到 `v2.0.26`/`dev`（这几处文件两版本一致）。
 
 | 文件 | 改动 |
 |---|---|

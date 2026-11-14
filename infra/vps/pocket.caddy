@@ -1,0 +1,47 @@
+# 私有:VPS 上的 opencode(host.docker.internal:4096)。
+# 仅站长用(认证由 opencode 自身提供),不进应用栏。见 Opencode-Pocket 仓库。
+pocket.{$DOMAIN} {
+	import accesslog
+	import webapp
+
+	# WebUI 本地补丁(2026-10-21):首屏消息 40 → 20。显式传 limit 的客户端(TUI/全量加载)不受影响。
+	@msgInitial {
+		path_regexp ^/api/session/[^/]+/message$
+		query limit=40
+	}
+	rewrite @msgInitial {http.request.uri.path}?limit=20&order=desc
+
+	# opencode API 与事件流仍反代到本机服务。
+	@opencodeApi path /api /api/* /auth /auth/* /openapi.json
+	handle @opencodeApi {
+		reverse_proxy host.docker.internal:4096 {
+			import sse
+		}
+	}
+
+	# App 图片上传 + WebUI 语音转写中继：/pocketd/* -> pocketd(8788)
+	# 说明：pocketd 跑在宿主机(0.0.0.0:8788)，容器经 host.docker.internal 访问。
+	handle /pocketd/* {
+		uri strip_prefix /pocketd
+		reverse_proxy host.docker.internal:8788
+	}
+
+	# 旧 Service Worker 补丁：清缓存 + 强制走网络，避免升级后仍命中旧 bundle。
+	handle /sw.js {
+		root * /srv/site/oc-patch
+		file_server
+		header Cache-Control "no-cache"
+	}
+
+	# WebUI 静态资源：本地构建（含语音输入 + 中文回车发送补丁）。
+	# 只接管静态资源；/api、/auth、/pocketd 仍由上面的 handle 处理。
+	handle {
+		root * /srv/site/pocket-app
+		@immutableAssets path /_assets/* /icons/* /assets/*
+		header @immutableAssets Cache-Control "public, max-age=31536000, immutable"
+		@pages not path /_assets/* /icons/* /assets/*
+		header @pages Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}
