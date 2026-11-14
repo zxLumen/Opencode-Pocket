@@ -38,6 +38,14 @@ export const config = {
   username: env.OPENCODE_SERVER_USERNAME || 'opencode',
   password,
   port: Number(env.POCKETD_PORT || 8788),
+  // WebUI 语音输入的中转目标：复用已有 ASR（Qwen3-ASR，SiliconFlow 额度）。
+  asr: {
+    url: (env.VOICE_ASR_URL || 'https://voice.zxlumen.cn/api/asr').replace(/\/+$/, ''),
+    maxBytes: Number(env.POCKET_ASR_MAX_BYTES || 20 * 1024 * 1024),
+    per5min: Number(env.POCKET_ASR_PER_5MIN || 30),
+    // 全局每日上限，避免公开域名被刷额度。
+    dailySeconds: Number(env.POCKET_ASR_DAILY_SECONDS || 1800),
+  },
   appScheme: env.POCKET_URL_SCHEME || 'opencodepocket',
   notifyIdle: String(env.NOTIFY_IDLE || 'true').toLowerCase() !== 'false',
   notifyStatus: String(env.NOTIFY_STATUS || 'false').toLowerCase() === 'true',

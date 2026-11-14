@@ -20,16 +20,45 @@ pocket.{$DOMAIN} {
 		Content-Security-Policy "frame-ancestors 'self' https://{$DOMAIN}"
 		-Server
 	}
-	# App 的图片上传中继：/pocketd/upload -> pocketd(8788)/upload
-	handle /pocketd/* {
-		uri strip_prefix /pocketd
-		reverse_proxy host.docker.internal:8788
+	# WebUI 本地补丁(2026-10-21):首屏消息 40 → 20。
+	@msgInitial {
+		path_regexp ^/api/session/[^/]+/message$
+		query limit=40
 	}
-	handle {
+	rewrite @msgInitial {http.request.uri.path}?limit=20&order=desc
+
+	# opencode API 与事件流。
+	@opencodeApi path /api /api/* /auth /auth/* /openapi.json
+	handle @opencodeApi {
 		reverse_proxy host.docker.internal:4096 {
 			# SSE（/api/event）必须关闭缓冲
 			flush_interval -1
 		}
+	}
+
+	# App 图片上传 + WebUI 语音转写中继：/pocketd/* -> pocketd(8788)
+	handle /pocketd/* {
+		uri strip_prefix /pocketd
+		reverse_proxy host.docker.internal:8788
+	}
+
+	# 直通 SW：清旧缓存 + 强制走网络（升级 WebUI 后不命中旧 bundle）。
+	handle /sw.js {
+		root * /srv/site/oc-patch
+		file_server
+		header Cache-Control "no-cache"
+	}
+
+	# WebUI 静态资源：本地构建（含语音输入 + 中文回车发送补丁）。
+	# 服务器上执行 infra/vps/deploy-webui.sh 把 dist 同步到 /srv/site/pocket-app。
+	handle {
+		root * /srv/site/pocket-app
+		@immutableAssets path /_assets/* /icons/* /assets/*
+		header @immutableAssets Cache-Control "public, max-age=31536000, immutable"
+		@pages not path /_assets/* /icons/* /assets/*
+		header @pages Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
 	}
 }
 

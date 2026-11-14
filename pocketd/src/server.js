@@ -61,6 +61,136 @@ function slimMessagePage(page) {
   return out;
 }
 
+const asrAuthCache = new Map()
+
+/**
+ * WebUI 的语音转写请求带着 opencode 的 Basic 头（密码或 pairing session token）。
+ * 直接找 opencode /api/info 验一次，避免在 pocketd 里重复实现 token 校验。
+ */
+async function validOpencodeAuth(header) {
+  if (!header) return false
+  const now = Date.now()
+  const cached = asrAuthCache.get(header)
+  if (cached && cached > now) return true
+  try {
+    const upstream = await fetch(`${config.opencodeUrl}/api/info`, {
+      headers: { authorization: header },
+      signal: AbortSignal.timeout(5_000),
+    })
+    if (!upstream.ok) return false
+    asrAuthCache.set(header, now + 60_000)
+    if (asrAuthCache.size > 200) {
+      for (const [key, expires] of asrAuthCache) if (expires <= now) asrAuthCache.delete(key)
+      while (asrAuthCache.size > 200) asrAuthCache.delete(asrAuthCache.keys().next().value)
+    }
+    return true
+  } catch {
+    return false
+  }
+}
+
+const asrHits = new Map()
+
+function takeAsrHit(ip) {
+  const now = Date.now()
+  const window = 5 * 60_000
+  const hits = (asrHits.get(ip) || []).filter((at) => now - at < window)
+  if (hits.length >= config.asr.per5min) {
+    asrHits.set(ip, hits)
+    return false
+  }
+  hits.push(now)
+  asrHits.set(ip, hits)
+  if (asrHits.size > 500) {
+    for (const [key, list] of asrHits) if (!list.some((at) => now - at < window)) asrHits.delete(key)
+  }
+  return true
+}
+
+const asrBudget = { day: '', seconds: 0 }
+
+function bjDay() {
+  return new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10)
+}
+
+function readRequestBody(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = []
+    let size = 0
+    req.on('data', (chunk) => {
+      size += chunk.length
+      if (size > limit) {
+        const error = new Error('too large')
+        error.code = 'TOO_LARGE'
+        req.destroy()
+        reject(error)
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => resolve(Buffer.concat(chunks)))
+    req.on('error', reject)
+  })
+}
+
+/**
+ * 语音转写中继：浏览器录音（webm/mp4）→ 已有 ASR 服务 → { text }。
+ * 认证复用 opencode；限流按客户端 IP，另加每日音频秒数上限。
+ */
+async function handleAsr(req, res, send) {
+  if (!(await validOpencodeAuth(req.headers.authorization))) {
+    return send(401, { error: 'unauthorized' })
+  }
+
+  const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown'
+  if (!takeAsrHit(ip)) return send(429, { error: '语音识别太频繁，歇 5 分钟再试' })
+
+  const day = bjDay()
+  if (asrBudget.day !== day) {
+    asrBudget.day = day
+    asrBudget.seconds = 0
+  }
+  if (asrBudget.seconds >= config.asr.dailySeconds) return send(429, { error: '今天的语音识别额度用完了' })
+
+  const type = String(req.headers['content-type'] || 'audio/webm')
+  if (!/^audio\/|^application\/octet-stream/.test(type)) return send(415, { error: '只接受音频请求体' })
+
+  let body
+  try {
+    body = await readRequestBody(req, config.asr.maxBytes)
+  } catch (error) {
+    return send(error?.code === 'TOO_LARGE' ? 413 : 400, { error: error?.code === 'TOO_LARGE' ? '录音太长了' : '读取音频失败' })
+  }
+  if (body.length < 1_200) return send(400, { error: '录音太短了' })
+
+  try {
+    const upstream = await fetch(config.asr.url, {
+      method: 'POST',
+      headers: {
+        'content-type': type,
+        'x-voice-client': 'pocket',
+        ...(ip !== 'unknown' ? { 'x-forwarded-for': ip } : {}),
+      },
+      body,
+      signal: AbortSignal.timeout(45_000),
+    })
+    const text = await upstream.text()
+    if (!upstream.ok) {
+      let detail = text.slice(0, 200)
+      try {
+        detail = JSON.parse(text).error || detail
+      } catch { /* keep raw */ }
+      return send(upstream.status, { error: detail || '语音识别失败' })
+    }
+    const data = JSON.parse(text)
+    if (typeof data.seconds === 'number') asrBudget.seconds += data.seconds
+    return send(200, { text: data.text || '', seconds: data.seconds || 0 })
+  } catch (error) {
+    log.error(`asr relay failed: ${error?.message || error}`)
+    return send(502, { error: '语音识别服务暂时不可用' })
+  }
+}
+
 /** 代理 opencode 消息接口并裁掉超大字段（工具输入/输出等）。 */
 async function proxyMessages(url, res) {
   const sessionID = url.searchParams.get('session') || '';
@@ -178,6 +308,15 @@ export function startServer({ port, tokens }) {
       });
       ws.on('error', (e) => { log.error('upload write failed', e.message); send(500, { error: 'write failed' }); });
       return;
+    }
+
+    // 语音转写中继（WebUI 录音 → ASR）。
+    if (req.method === 'POST' && url.pathname === '/asr') {
+      handleAsr(req, res, send).catch((error) => {
+        log.error('asr handler failed', error?.message || error)
+        send(500, { error: 'asr failed' })
+      })
+      return
     }
 
     send(404, { error: 'not found' });
