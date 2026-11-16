@@ -33,6 +33,13 @@ pocket.{$DOMAIN} {
 		header Cache-Control "no-cache"
 	}
 
+	# 旧 runtime 的登录密码归一化补丁（opencode 升级后 asset 哈希会变，保留兼容）。
+	handle /_assets/runtime-BfldUWqN.js {
+		root * /srv/site/oc-patch
+		file_server
+		header Cache-Control "no-cache"
+	}
+
 	# WebUI 静态资源：本地构建（含语音输入 + 中文回车发送补丁）。
 	# 只接管静态资源；/api、/auth、/pocketd 仍由上面的 handle 处理。
 	handle {
